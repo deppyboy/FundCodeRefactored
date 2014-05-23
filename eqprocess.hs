@@ -3,9 +3,6 @@ module EqProcess where
 import Data.Complex
 import YC
 import VolSurf
-import Data.Random.RVar
-import Data.Random.Distribution.Normal
-import System.Random
 import RNG
 
 data Lognormal a = Lognormal { volatility :: a } deriving (Show, Eq)
@@ -25,7 +22,7 @@ class CharFunc a where
 	charfuncfactory :: (RealFloat b)=>a b->b->(Complex b->Complex b)
 
 instance CharFunc Lognormal where
-	charfuncfactory (Lognormal volatility) t = f 
+	charfuncfactory (Lognormal volatility) t = f
 		where 	
 			f x = exp $ -i*vol*vol/2.0*tc*x-vol*vol*x*x/2.0*tc
 			i = 0.0:+1.0
@@ -54,16 +51,29 @@ instance CharFunc Heston where
 			volvolc = convert volvol
 
 class Discretize a where
-	evolve :: a Double->PrefetchRands->YieldCurve Double->YieldCurve Double->Double->Double->Double->(Double, (a Double, PrefetchRands))
+	evolve :: a Double->(Distribution->PrefetchRands)->YieldCurve Double->
+		YieldCurve Double->Double->Double->Double->(Double, (a Double, Distribution->PrefetchRands))
+	genpath :: a Double->(Distribution->PrefetchRands)->YieldCurve Double->
+		YieldCurve Double->Double->Double->Double->Int->([Double], (a Double, Distribution->PrefetchRands))
+	genpath proc rng rf div lvl t1 t2 intervals = genpath' [lvl] rng t1 intervals
+		where
+			genpath' lvls rng' start 1 = (lvls++[newlvl], (newproc, newrng))
+				where
+					(newlvl, (newproc, newrng)) = evolve proc rng' rf div (last lvls) start t2
+			genpath' lvls rng' start n = genpath' (lvls++[newlvl]) newrng (start+dt) (n-1)
+				where
+					(newlvl, (newproc, newrng)) = evolve proc rng' rf div (last lvls) start (start+dt)
+					dt = (t2-start)/(fromIntegral n)
+
 
 instance Discretize Lognormal where
 	evolve (Lognormal vol) rng rf div lvl t1 t2 = (newlvl, (Lognormal vol, newrng))
 		where
-			(rand, newrng) = fetchrand rng
+			(rand, newrng) = fetchrand $ rng Normal
 			t = t2-t1
 			r = forward rf t1 t2 - forward div t1 t2
-			rate = (*) t $ r-vol*vol*t/2.0
-			newlvl = lvl*exp (rate+lvl*vol*(sqrt t))
+			rate = (*) t (r-vol*vol*t/2.0)
+			newlvl = lvl*exp (rate+rand*vol*(sqrt t))
 
 instance Discretize Dupire where
 	evolve dp rng rf div lvl t1 t2 = (newlvl, (dp, newrng))
@@ -74,7 +84,7 @@ instance Discretize Dupire where
 instance Discretize Heston where
 	evolve (Heston vinit vfinal kap sigma correl) rng rf div lvl t1 t2 = (newlvl, (Heston flipv vfinal kap sigma correl, newrng))
 		where
-			([x,y], newrng) = fetchrands rng 2
+			([x,y], newrng) = fetchrands (rng Normal) 2
 			z = correl*x+sqrt (1-correl*correl)*y
 			r = forward rf t1 t2 - forward div t1 t2
 			t = t2-t1
@@ -82,6 +92,9 @@ instance Discretize Heston where
 			newv = (sqrt vinit+sigma/2.0*(sqrt t)*z)^2-kap*(vinit-vfinal)*t-sigma*sigma*t/4.0
 			flipv = if newv>0.0 then newv else -newv
 		
+
+
+
 
 localvol (Dupire riskf div s vs) k t | w==0.0 || solution<0.0 = sqrt dwdt
 				     | otherwise = sqrt solution
@@ -103,3 +116,4 @@ localvol (Dupire riskf div s vs) k t | w==0.0 || solution<0.0 = sqrt dwdt
 					strikept = k*fwd t (t+dt)
 					strikemt = k/(fwd t (t-dt))
 		solution = dwdt/(1.0-y/w*dwdy+0.25*(-0.25-1.0/w+y*y/w/w)*dwdy*dwdy+0.5*d2wdy2)
+
