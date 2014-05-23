@@ -3,6 +3,8 @@ module VolSurf where
 import HassetsMath
 import qualified Data.Vector.Unboxed as U
 
+--TODO: Redo with splines as internals!
+
 data VolSurf a =   VolSurf { 	grid :: [[a]],
 				maturities :: [a],
 				strikes :: [a] } deriving (Show, Eq)
