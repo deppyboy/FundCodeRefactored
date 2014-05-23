@@ -7,14 +7,11 @@ data Distribution = Normal | Uniform deriving (Show, Eq)
 
 data PrefetchRands = PrefetchRands { fetched :: [Double], gen :: PureMT } deriving (Show)
 
-x = 64 :: Word64
-
-j = pureMT x
-k = PrefetchRands [] j
 
 boxMuller :: (Floating a)=>a->a->(a,a)
 boxMuller r1 r2 = (f cos, f sin)
 	where f a = sqrt (-2.0*log r1) * (a $ 2.0*pi*r2)
+
 
 fetchrand :: PrefetchRands->Distribution->(Double, PrefetchRands)
 fetchrand (PrefetchRands xs rng) Normal | xs==[] = (bm1, PrefetchRands [bm2] gen2)
