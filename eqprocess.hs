@@ -18,6 +18,8 @@ data Dupire a = Dupire { rf :: YieldCurve a,
 			 s0  :: a,
 			 vols :: VolSurf a}
 
+data MCState a = MCState { model :: a Double, esgstate :: PrefetchRands }
+
 class CharFunc a where
 	charfuncfactory :: (RealFloat b)=>a b->b->(Complex b->Complex b)
 
@@ -51,49 +53,58 @@ instance CharFunc Heston where
 			volvolc = convert volvol
 
 class Discretize a where
-	evolve :: a Double->(Distribution->PrefetchRands)->YieldCurve Double->
-		YieldCurve Double->Double->Double->Double->(Double, (a Double, Distribution->PrefetchRands))
-	genpath :: a Double->(Distribution->PrefetchRands)->YieldCurve Double->
-		YieldCurve Double->Double->Double->Double->Int->([Double], (a Double, Distribution->PrefetchRands))
-	genpath proc rng rf div lvl t1 t2 intervals = genpath' [lvl] rng t1 intervals
+	evolve ::  MCState a->         --model + rng
+		   YieldCurve Double-> --rf curve
+		   YieldCurve Double-> --carry curve
+		   Double->            --start level
+		   Double->            --start time
+		   Double->            --end time
+		   (Double, MCState a) --final value and state
+
+	genpath :: MCState a->         --model + rng
+		   YieldCurve Double-> --risk-free rate
+		   YieldCurve Double-> --carry curve
+		   Double->            --start level
+		   Double->            --start time
+		   Double->            --end time
+		   Int->               --steps
+		   ([Double], MCState a)  --final model + rng
+	genpath initstate rf div lvl t1 t2 intervals = genpath' [lvl] initstate t1 intervals
 		where
-			genpath' lvls rng' start 1 = (lvls++[newlvl], (newproc, newrng))
+			genpath' lvls mcs start 1 = (lvls++[newlvl], mcs')
 				where
-					(newlvl, (newproc, newrng)) = evolve proc rng' rf div (last lvls) start t2
-			genpath' lvls rng' start n = genpath' (lvls++[newlvl]) newrng (start+dt) (n-1)
+					(newlvl, mcs') = evolve mcs rf div (last lvls) start t2
+			genpath' lvls mcs start n = genpath' (lvls++[newlvl]) mcs' (start+dt) (n-1)
 				where
-					(newlvl, (newproc, newrng)) = evolve proc rng' rf div (last lvls) start (start+dt)
+					(newlvl, mcs') = evolve mcs rf div (last lvls) start (start+dt)
 					dt = (t2-start)/(fromIntegral n)
 
 
 instance Discretize Lognormal where
-	evolve (Lognormal vol) rng rf div lvl t1 t2 = (newlvl, (Lognormal vol, newrng))
+	evolve (MCState (Lognormal vol) rng) rf div lvl t1 t2 = (newlvl, MCState (Lognormal vol) newrng)
 		where
-			(rand, newrng) = fetchrand $ rng Normal
+			(rand, newrng) = fetchrand rng Normal
 			t = t2-t1
 			r = forward rf t1 t2 - forward div t1 t2
 			rate = (*) t (r-vol*vol*t/2.0)
 			newlvl = lvl*exp (rate+rand*vol*(sqrt t))
 
 instance Discretize Dupire where
-	evolve dp rng rf div lvl t1 t2 = (newlvl, (dp, newrng))
+	evolve (MCState dp rng) rf div lvl t1 t2 = (newlvl, MCState dp newrng)
 		where
 			lvol = localvol dp lvl t1
-			(newlvl, (_, newrng)) = evolve (Lognormal lvol) rng rf div lvl t1 t2
+			(newlvl, MCState _ newrng) = evolve (MCState (Lognormal lvol) rng) rf div lvl t1 t2
 
 instance Discretize Heston where
-	evolve (Heston vinit vfinal kap sigma correl) rng rf div lvl t1 t2 = (newlvl, (Heston flipv vfinal kap sigma correl, newrng))
+	evolve (MCState (Heston vinit vfinal kap sigma correl) rng) rf div lvl t1 t2 = (newlvl, MCState (Heston flipv vfinal kap sigma correl) newrng)
 		where
-			([x,y], newrng) = fetchrands (rng Normal) 2
+			([x,y], newrng) = fetchrands rng Normal 2
 			z = correl*x+sqrt (1-correl*correl)*y
 			r = forward rf t1 t2 - forward div t1 t2
 			t = t2-t1
 			newlvl = lvl * exp (r-vinit/2.0+x*sqrt (vinit*t))
 			newv = (sqrt vinit+sigma/2.0*(sqrt t)*z)^2-kap*(vinit-vfinal)*t-sigma*sigma*t/4.0
 			flipv = if newv>0.0 then newv else -newv
-		
-
-
 
 
 localvol (Dupire riskf div s vs) k t | w==0.0 || solution<0.0 = sqrt dwdt
