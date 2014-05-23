@@ -66,6 +66,3 @@ parswap :: (RealFloat a, Enum a, Ord a, U.Unbox a)=>YieldCurve a->a->a
 parswap yc tmat = (1.0-(last discs)) / sum (discs) *2.0
 	where discs = map (disc yc) [0.5,1.0..tmat]
 
---just for testing/fun
-basiccurve :: (RealFloat a, U.Unbox a)=>a->YieldCurve a
-basiccurve rate = LinearPar [0.0,40.0] [rate, rate]
