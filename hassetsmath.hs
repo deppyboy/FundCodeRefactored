@@ -2,6 +2,7 @@ module HassetsMath where
 
 import CubicSpline
 import qualified Data.Vector.Unboxed as U
+import qualified Data.Vector as V
 
 interpolate1d :: (Fractional a, Ord a) => [a]->[a]->a->a
 interpolate1d (x1:x2:xs) (y1:y2:ys) xval | xval<=x1 = y1
@@ -18,13 +19,13 @@ interpolate2d grid xs ys xval yval = interpolate1d xs [interpolate1d ys row yval
 interpolate2dcubic :: (Fractional a, Ord a, U.Unbox a) => [[a]]->[a]->[a]->a->a->a
 interpolate2dcubic grid xs ys xval yval = interpolate1dcubic xs [interpolate1dcubic ys row yval | row<-grid] xval
 
-simpint :: (Enum a, Floating a, U.Unbox a)=>(a->a)->a->a->Int->a
+simpint :: (Enum a, Floating a)=>(a->a)->a->a->Int->a
 simpint f a b intervals = 
-	dx * ((U.head fy + U.last fy)/6.0 + U.sum(U.tail $ U.init fy)/3.0 + U.sum(U.tail fx)*2.0/3.0)
+	dx * ((V.head fy + V.last fy)/6.0 + V.sum(V.tail $ V.init fy)/3.0 + V.sum(V.tail fx)*2.0/3.0)
 		where
                   dx = (b-a)/(fromIntegral intervals)
-                  fy = U.map f $ U.enumFromStepN a dx (intervals+1)
-                  fx = U.map f $ U.enumFromStepN (a-0.5*dx) dx (intervals+1)
+                  fy = V.map f $ V.enumFromStepN a dx (intervals+1)
+                  fx = V.map f $ V.enumFromStepN (a-0.5*dx) dx (intervals+1)
 
 newtonmethod :: (Enum a, Floating a, Ord a)=>(a->a)->a->a->a->a->a
 newtonmethod f target guess tol perturb | abs diff < tol = guess
