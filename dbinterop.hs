@@ -1,6 +1,5 @@
 module DBInterOp where
 
-import Data.Maybe
 import Data.Time.Calendar
 import Database.HDBC
 import Database.HDBC.ODBC
@@ -9,35 +8,42 @@ import Data.Time.Format
 import Control.Monad
 import YC
 import HardCodes
+import VolSurf
 
-oracledatebuilder :: FormatTime t=>t->[Char]
-oracledatebuilder date = "TO_DATE('"++""++timerep++"','yyyymmdd')"
+mesh :: [a]->[b]->[[(a,b)]]
+mesh _ [] = []
+mesh x (y:ys) = map (\b->(b,y)) x : mesh x ys
+
+oracleDateBuilder :: FormatTime t=>t->[Char]
+oracleDateBuilder date = "TO_DATE('"++""++timerep++"','yyyymmdd')"
 	where timerep = formatTime defaultTimeLocale "%Y%m%d" date
 
-numreader :: SqlValue->Double
-numreader x = if head a=='.' then read ('0':a) :: Double else read a :: Double
+numReader :: SqlValue->Double
+numReader x = if head a=='.' then read ('0':a) :: Double else read a :: Double
 	where a = fromSql x :: String
 
-loadyc :: FormatTime t=>t->IO (YieldCurve Double)
-loadyc date = do
+loadYC :: FormatTime t=>t->IO (YieldCurve Double)
+loadYC date = do
 		conn <- connectODBC cstring
-		rates <- mapM (\x->getratefromdb conn date x) yccodes
+		rates <- mapM (\x->getRateFromDB conn date x) yccodes
 		return $ stripcurvecubicparlogdisc ycterms rates
 			where 
-				getratefromdb conn date ticker = do
+				getRateFromDB conn date ticker = do
 					let sql = "SELECT LAST_RATE FROM ODSACT.ACT_PRC_BLM_LBR_SWP WHERE VALUATION_DT="
-						++oracledatebuilder date++" AND TICKER='"++ticker++"';"
+						++oracleDateBuilder date++" AND TICKER='"++ticker++"';"
 					preparedsql <- prepare conn sql
 					execute preparedsql  []
 					outval <- fetchAllRows preparedsql
-					return $ (numreader $ head $ head $ outval) / 100.0
+					return $ (numReader $ head $ head $ outval) / 100.0
 
 
-getdivfromdb :: [Char]->Day->IO (YieldCurve Double)
-getdivfromdb idx date = do
+getDivFromDB :: [Char]-> --Index Name
+		Day->    --Date
+		IO (YieldCurve Double)
+getDivFromDB idx date = do
 		ioconn <- connectODBC cstring
 		let sql = "SELECT maturity_date, implied_spot, market_discount_factor, market_forward \
-			\ from ODSACT.ACT_PRC_MRKT_DLY_VLTY WHERE valuation_date="++oracledatebuilder date++
+			\ from ODSACT.ACT_PRC_MRKT_DLY_VLTY WHERE valuation_date="++oracleDateBuilder date++
 			" and market_name='"++idx++"' group by maturity_date, implied_spot, \
 			\ market_discount_factor, market_forward order by maturity_date ASC;"
 		preparedsql <- prepare ioconn sql
@@ -49,12 +55,47 @@ getdivfromdb idx date = do
 					where 
 						t = (fromIntegral $ diffDays mat date)/365.0
 						mat = fromSql dt
-						sp = numreader spot
-						disc = numreader mdf
-						fwd = numreader mktfwd
+						sp = numReader spot
+						disc = numReader mdf
+						fwd = numReader mktfwd
 		return $ stripcurvecubicparlogdisc (map fst allvals) (map snd allvals)
 
+getVolDates :: Connection->Day->IO [Day]
+getVolDates ioconn date = do
+	let sql = "SELECT maturity_date from ODSACT.ACT_PRC_MRKT_DLY_VLTY \
+		\  WHERE valuation_date="++oracleDateBuilder date++
+		" GROUP BY MATURITY_DATE;"
+	preparedsql <- prepare ioconn sql
+	execute preparedsql  []
+	outval <- fetchAllRows preparedsql
+	let dates = map (fromSql . head) outval
+	return dates
 
-myyc = loadyc $ fromGregorian 2013 12 31
-mydiv = getdivfromdb "MSCI EAFE" $ fromGregorian 2013 12 31
 
+getVols :: [Char]-> --Index Name
+	   Day-> --Date
+	   IO (VolSurf Double)
+getVols idx date = do
+	ioconn <- connectODBC cstring
+	dates <- getVolDates ioconn date
+	let meshes = mesh volstrikes dates
+	let volfunc (strike, dt) = getVolByDateStrike dt strike
+		where getVolByDateStrike mat strike = do
+			let sql = "SELECT market_volatility_pct from ODSACT.ACT_PRC_MRKT_DLY_VLTY \
+				  \ WHERE maturity_date="++oracleDateBuilder mat++
+				  " and valuation_date="++oracleDateBuilder date++
+				  " and market_name='"++idx++"' and strike_number="++show strike++";"
+			preparedsql <- prepare ioconn sql
+			execute preparedsql  []
+			outval <- fetchAllRows preparedsql
+			let vol = head $ map (numReader . head) outval
+			return vol
+	strikevols <- mapM (mapM volfunc) meshes
+	let mats =  map (\x->(fromIntegral $ diffDays x date)/365.0) dates
+	return $ VolSurf strikevols mats (map (\x->fromIntegral x / 100) volstrikes)
+	
+
+dt2013 = fromGregorian 2013 12 31
+myyc = loadYC dt2013
+mydiv = getDivFromDB "MSCI EAFE" dt2013
+myvol = getVols "MSCI EAFE" dt2013
