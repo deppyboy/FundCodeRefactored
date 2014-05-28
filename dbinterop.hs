@@ -10,11 +10,17 @@ import YC
 import HardCodes
 import VolSurf
 
+prepareAndGrab :: IConnection conn=>conn->String->IO [[SqlValue]]
+prepareAndGrab conn sql = do
+	preparedsql <- prepare conn sql
+	execute preparedsql []
+	fetchAllRows preparedsql
+
 mesh :: [a]->[b]->[[(a,b)]]
 mesh _ [] = []
 mesh x (y:ys) = map (\b->(b,y)) x : mesh x ys
 
-oracleDateBuilder :: FormatTime t=>t->[Char]
+oracleDateBuilder :: FormatTime t=>t->String
 oracleDateBuilder date = "TO_DATE('"++""++timerep++"','yyyymmdd')"
 	where timerep = formatTime defaultTimeLocale "%Y%m%d" date
 
@@ -25,7 +31,7 @@ numReader x = if head a=='.' then read ('0':a) :: Double else read a :: Double
 loadYC :: FormatTime t=>t->IO (YieldCurve Double)
 loadYC date = do
 		conn <- connectODBC cstring
-		rates <- mapM (\x->getRateFromDB conn date x) yccodes
+		rates <- mapM (getRateFromDB conn date) yccodes
 		return $ stripcurvecubicparlogdisc ycterms rates
 			where 
 				getRateFromDB conn date ticker = do
@@ -34,10 +40,10 @@ loadYC date = do
 					preparedsql <- prepare conn sql
 					execute preparedsql  []
 					outval <- fetchAllRows preparedsql
-					return $ (numReader $ head $ head $ outval) / 100.0
+					return $ numReader (head $ head outval) / 100.0
 
 
-getDivFromDB :: [Char]-> --Index Name
+getDivFromDB :: String-> --Index Name
 		Day->    --Date
 		IO (YieldCurve Double)
 getDivFromDB idx date = do
@@ -46,14 +52,12 @@ getDivFromDB idx date = do
 			\ from ODSACT.ACT_PRC_MRKT_DLY_VLTY WHERE valuation_date="++oracleDateBuilder date++
 			" and market_name='"++idx++"' group by maturity_date, implied_spot, \
 			\ market_discount_factor, market_forward order by maturity_date ASC;"
-		preparedsql <- prepare ioconn sql
-		execute preparedsql  []
-		outval <- fetchAllRows preparedsql
+		outval <- prepareAndGrab ioconn sql
 		let allvals = map f outval
 			where
-				f (dt:spot:mdf:mktfwd:_) = (t, -(log $ fwd*disc/sp) / t)
+				f (dt:spot:mdf:mktfwd:_) = (t, -log (fwd*disc/sp) / t)
 					where 
-						t = (fromIntegral $ diffDays mat date)/365.0
+						t = fromIntegral (diffDays mat date)/365.0
 						mat = fromSql dt
 						sp = numReader spot
 						disc = numReader mdf
@@ -65,14 +69,12 @@ getVolDates ioconn date = do
 	let sql = "SELECT maturity_date from ODSACT.ACT_PRC_MRKT_DLY_VLTY \
 		\  WHERE valuation_date="++oracleDateBuilder date++
 		" GROUP BY MATURITY_DATE;"
-	preparedsql <- prepare ioconn sql
-	execute preparedsql  []
-	outval <- fetchAllRows preparedsql
+	outval <- prepareAndGrab ioconn sql
 	let dates = map (fromSql . head) outval
 	return dates
 
 
-getVols :: [Char]-> --Index Name
+getVols :: String-> --Index Name
 	   Day-> --Date
 	   IO (VolSurf Double)
 getVols idx date = do
@@ -87,11 +89,11 @@ getVols idx date = do
 				  " and market_name='"++idx++"' and strike_number="++show strike++";"
 			preparedsql <- prepare ioconn sql
 			execute preparedsql  []
-			outval <- fetchAllRows preparedsql
+			outval <- prepareAndGrab ioconn sql
 			let vol = head $ map (numReader . head) outval
 			return vol
 	strikevols <- mapM (mapM volfunc) meshes
-	let mats =  map (\x->(fromIntegral $ diffDays x date)/365.0) dates
+	let mats =  map (\x->fromIntegral (diffDays x date)/365.0) dates
 	return $ VolSurf strikevols mats (map (\x->fromIntegral x / 100) volstrikes)
 	
 

@@ -23,7 +23,7 @@ stripcurvelinearpar mats rates = LinearPar times $ recursivestrip times interpra
 		interprates = map interp times
 		interp = interpolate1d mats rates
 		recursivestrip [] [] _ = []
-		recursivestrip (t:ts) (x:xs) cumdisc = (-log(disc)/t):recursivestrip ts xs (disc+cumdisc)
+		recursivestrip (t:ts) (x:xs) cumdisc = (-log disc/t):recursivestrip ts xs (disc+cumdisc)
 			where disc = (1.0-x/2.0*cumdisc)/(1.0+x/2.0)
 
 --takes a par curve and uses a cubic spline on pars and linear on the log-discs
@@ -43,7 +43,7 @@ stripcurvecubiccubic mats rates = CubicParCubicSpot $ createSpline times $ recur
 		times = [0.5,1.0..40]
 		interprates = map (evalSpline (createSpline mats rates)) times
 		recursivestrip [] [] _ = []
-		recursivestrip (t:ts) (x:xs) cumdisc = (-log(disc)/t):recursivestrip ts xs (disc+cumdisc)
+		recursivestrip (t:ts) (x:xs) cumdisc = (-log disc/t):recursivestrip ts xs (disc+cumdisc)
 			where disc = (1.0-x/2.0*cumdisc)/(1.0+x/2.0)
 
 
@@ -63,6 +63,6 @@ forward yc t1 t2 = -log(d2 / d1)/(t2-t1)
 
 --calculates par rates
 parswap :: (RealFloat a, Enum a, Ord a, U.Unbox a)=>YieldCurve a->a->a
-parswap yc tmat = (1.0-(last discs)) / sum (discs) *2.0
+parswap yc tmat = (1.0-last discs) / sum discs *2.0
 	where discs = map (disc yc) [0.5,1.0..tmat]
 

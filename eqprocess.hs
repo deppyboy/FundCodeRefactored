@@ -23,7 +23,7 @@ data MCState a = MCState { model :: a Double,
 			   lvlstate :: Double }
 
 class CharFunc a where
-	charfuncfactory :: (RealFloat b)=>a b->b->(Complex b->Complex b)
+	charfuncfactory :: (RealFloat b)=>a b->b->Complex b->Complex b
 
 instance CharFunc Lognormal where
 	charfuncfactory (Lognormal volatility) t = f
@@ -36,14 +36,14 @@ instance CharFunc Lognormal where
 instance CharFunc Heston where
 	charfuncfactory (Heston v0 vf kappa volvol rho) t = f 
 		where
-			f x = exp $ (b x + c x)
+			f x = exp (b x + c x)
 			zeta x = -(x*x+i*x)/2.0
 			gamma x = kapc-rhoc*volvolc*x*i
-			psi x = sqrt $ (gamma x) * (gamma x)-2.0*vol*vol*zeta x
+			psi x = sqrt $ gamma x * gamma x-2.0*vol*vol*zeta x
 			btop x = 2.0*zeta x*(1.0-exp (-psi x*tc))*vol
 			bbottom x = 2.0*psi x-(psi x - gamma x)*(1.0-exp(-tc*psi x))
 			b x = btop x / bbottom x
-			logterm x = (2.0*psi x-(psi x-gamma x)*(1.0-exp(-tc*psi x)))/2.0/(psi x)
+			logterm x = (2.0*psi x-(psi x-gamma x)*(1.0-exp(-tc*psi x)))/2.0/psi x
 			c x = -kapc*vfc/volvolc/volvolc*(2.0*log(logterm x)+(psi x-gamma x)*tc)
 			convert x = x:+0.0
 			i = 0.0:+1.0
@@ -73,16 +73,14 @@ class Discretize a where
 				newlevel <- evolve rf div start t2
 				return (lvls++[newlevel])
 			genpath' lvls start n = do
-				let dt = (t2-start)/(fromIntegral n)
+				let dt = (t2-start)/fromIntegral n
 				newlvl <- evolve rf div start (start+dt)
-				solution <- genpath' (lvls++[newlvl]) (start+dt) (n-1)
-				return solution
-		result<-genpath' [] t1 intervals
-		return result
+				genpath' (lvls++[newlvl]) (start+dt) (n-1)
+		genpath' [] t1 intervals
 				
 
 randWrapper :: Distribution->State (MCState a) Double
-randWrapper x = state $ f
+randWrapper x = state f
 	where 
 		f (MCState a1 myrng a3) = (randval, MCState a1 newrng a3)
 			where (randval, newrng) = fetchrand myrng x
@@ -97,9 +95,9 @@ instance Discretize Lognormal where
 			r = forward rf t1 t2 - forward div t1 t2
 			vol = lnvolatility model
 			rate = (*) t (r-vol*vol*t/2.0)
-			newlvl = lvl*exp (rate+rand*vol*(sqrt t))
+			newlvl = lvl*exp (rate+rand*vol*sqrt t)
 		put $ MCState model rng newlvl
-		return $ newlvl
+		return newlvl
 
 instance Discretize Dupire where
 	evolve rf div t1 t2 = do
@@ -111,9 +109,9 @@ instance Discretize Dupire where
 			r = forward rf t1 t2 - forward div t1 t2
 			lvol = localvol model rf div lvl t1
 			rate = (*) t (r-lvol*lvol*t/2.0)
-			newlvl = lvl*exp (rate+rand*lvol*(sqrt t))
+			newlvl = lvl*exp (rate+rand*lvol*sqrt t)
 		put $ MCState model rng newlvl
-		return $ newlvl
+		return newlvl
 
 instance Discretize Heston where
 	evolve rf div t1 t2 = do
@@ -127,7 +125,7 @@ instance Discretize Heston where
 			r = forward rf t1 t2 - forward div t1 t2
 			t = t2-t1
 			newlvl = lvl * exp (r-vinit/2.0+x*sqrt (vinit*t))
-			newv = (sqrt vinit+sigma/2.0*(sqrt t)*z)^2-kap*(vinit-vfinal)*t-sigma*sigma*t/4.0
+			newv = (sqrt vinit+sigma/2.0*z*sqrt t)^2-kap*(vinit-vfinal)*t-sigma*sigma*t/4.0
 			flipv = if newv>0.0 then newv else -newv
 		put (MCState (Heston flipv vfinal kap sigma correl) rng newlvl)
 		return newlvl
@@ -139,8 +137,8 @@ localvol :: (RealFloat a, U.Unbox a)=>Dupire a->YieldCurve a->YieldCurve a->a->a
 localvol (Dupire vs s) rcurve dcurve k t | w==0.0 || solution<0.0 = sqrt dwdt
 			                 | otherwise = sqrt solution
 	where
-		fwd t1 t2 = exp $ (forward rcurve t1 t2) - (forward dcurve t1 t2)
-		f = s*(fwd 0.0 t)
+		fwd t1 t2 = exp $ forward rcurve t1 t2 - forward dcurve t1 t2
+		f = s*fwd 0.0 t
 		y = log $ k/f
 		dy = 1.0E-6
 		[kp, km] = map (*k) [dy, 1/dy]
@@ -154,5 +152,5 @@ localvol (Dupire vs s) rcurve dcurve k t | w==0.0 || solution<0.0 = sqrt dwdt
 			otherwise->(var (strikept/s)-var (strikemt/s))/2.0/dt
 				where 
 					strikept = k*fwd t (t+dt)
-					strikemt = k/(fwd t (t-dt))
+					strikemt = k/fwd t (t-dt)
 		solution = dwdt/(1.0-y/w*dwdy+0.25*(-0.25-1.0/w+y*y/w/w)*dwdy*dwdy+0.5*d2wdy2)
