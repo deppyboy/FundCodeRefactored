@@ -94,7 +94,7 @@ getVols idx date = do
 			return vol
 	strikevols <- mapM (mapM volfunc) meshes
 	let mats =  map (\x->fromIntegral (diffDays x date)/365.0) dates
-	return $ VolSurf strikevols mats (map (\x->fromIntegral x / 100) volstrikes)
+	return $ mkVolSurf strikevols mats $ map (\x->fromIntegral x / 100) volstrikes
 	
 
 dt2013 = fromGregorian 2013 12 31
