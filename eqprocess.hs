@@ -137,20 +137,24 @@ localvol :: (RealFloat a, U.Unbox a)=>Dupire a->YieldCurve a->YieldCurve a->a->a
 localvol (Dupire vs s) rcurve dcurve k t | w==0.0 || solution<0.0 = sqrt dwdt
 			                 | otherwise = sqrt solution
 	where
-		fwd t1 t2 = exp $ forward rcurve t1 t2 - forward dcurve t1 t2
-		f = s*fwd 0.0 t
+		discs tmat = (disc rcurve tmat, disc dcurve tmat)
+		(dr,dq) = discs t		
+		f = s*dq/dr
 		y = log $ k/f
 		dy = 1.0E-6
-		[kp, km] = map (*k) [dy, 1/dy]
-		[w, wp, wm] = map var [k/s, kp/s, km/s]
+		[kp, km] = map (*k) [exp dy, 1/exp dy]
+		[w, wp, wm] = map (\x->var (x/s) t) [k, kp, km]
 		dwdy = (wp-wm)/2.0/dy
 		d2wdy2 = (wp-2.0*w+wm)/dy/dy
-		var a = variance vs a t
+		var = variance vs
 		dt = min 0.0001 (t/2.0)
-		dwdt = case t of
-			0.0->(var (k*fwd t (t+1E-5))-w)/dt
-			otherwise->(var (strikept/s)-var (strikemt/s))/2.0/dt
-				where 
-					strikept = k*fwd t (t+dt)
-					strikemt = k/fwd t (t-dt)
+		dwdt = let 
+				strikept = k*dr*dqpt/drpt/dq
+				strikemt = k*dr*dqmt/drmt/dq
+				(drpt, dqpt) = discs $ t+dt
+				(drmt, dqmt) = discs $ t-dt
+			in case t of
+				0.0->(var (strikept/s) (t+dt) -w)/dt
+				otherwise->(var (strikept/s) (t+dt)-var (strikemt/s) (t-dt))/2.0/dt
+			
 		solution = dwdt/(1.0-y/w*dwdy+0.25*(-0.25-1.0/w+y*y/w/w)*dwdy*dwdy+0.5*d2wdy2)
