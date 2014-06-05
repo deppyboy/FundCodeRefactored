@@ -5,7 +5,6 @@ import Database.HDBC
 import Database.HDBC.ODBC
 import System.Locale
 import Data.Time.Format
-import Control.Monad
 import YC
 import HardCodes
 import VolSurf
@@ -15,6 +14,7 @@ prepareAndGrab conn sql = do
 	preparedsql <- prepare conn sql
 	execute preparedsql []
 	fetchAllRows preparedsql
+
 
 mesh :: [a]->[b]->[[(a,b)]]
 mesh _ [] = []
@@ -87,8 +87,6 @@ getVols idx date = do
 				  \ WHERE maturity_date="++oracleDateBuilder mat++
 				  " and valuation_date="++oracleDateBuilder date++
 				  " and market_name='"++idx++"' and strike_number="++show strike++";"
-			preparedsql <- prepare ioconn sql
-			execute preparedsql  []
 			outval <- prepareAndGrab ioconn sql
 			let vol = head $ map (numReader . head) outval
 			return vol
