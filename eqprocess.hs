@@ -5,7 +5,6 @@ import YC
 import VolSurf
 import RNG
 import Control.Monad.State
-import qualified Data.Vector.Unboxed as U
 
 data Lognormal a = Lognormal { lnvolatility :: a } deriving (Show, Eq)
 
@@ -133,7 +132,7 @@ instance Discretize Heston where
 unwrap :: MCState t-> (t Double, PrefetchRands, Double)
 unwrap (MCState a b c) = (a,b,c)
 
-localvol :: (RealFloat a, U.Unbox a)=>Dupire a->YieldCurve a->YieldCurve a->a->a->a
+localvol :: (RealFloat a)=>Dupire a->YieldCurve a->YieldCurve a->a->a->a
 localvol (Dupire vs s) rcurve dcurve k t | w==0.0 || solution<0.0 = sqrt dwdt
 			                 | otherwise = sqrt solution
 	where
