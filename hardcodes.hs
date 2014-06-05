@@ -1,6 +1,6 @@
 module HardCodes where
 
-cstring = "DSN=OracleDB;PWD=tdees_5"
+cstring = "DSN=OracleDB;PWD=tdees_6"
 yccodes = ["US0003M",
            "USSW1",
            "USSW2",
