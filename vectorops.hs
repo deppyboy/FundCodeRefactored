@@ -54,4 +54,4 @@ sqrtV :: Floating a=>V.Vector a->V.Vector a
 sqrtV = V.map sqrt
 
 expV :: Floating a=>V.Vector a->V.Vector a
-expV = V.map sqrt
+expV = V.map exp
