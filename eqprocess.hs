@@ -15,7 +15,7 @@ data Heston a = Heston { v0 :: a,
 			 rho :: a } deriving (Show, Eq)
 
 data Dupire a = Dupire { vols :: VolSurf a,
-			 s0   :: a} deriving (Show, Eq)
+			 			 s0   :: a} deriving (Show, Eq)
 
 data MCState a = MCState { model :: a Double, 
 			   rngstate :: PrefetchRands, 
@@ -25,15 +25,15 @@ class CharFunc a where
 	charfuncfactory :: (RealFloat b)=>a b->b->Complex b->Complex b
 
 instance CharFunc Lognormal where
-	charfuncfactory (Lognormal volatility) t = f
+	charfuncfactory (Lognormal v) t = f
 		where 	
 			f x = exp $ -i*vol*vol/2.0*tc*x-vol*vol*x*x/2.0*tc
 			i = 0.0:+1.0
 			tc = t:+0.0
-			vol = volatility:+0.0
+			vol = v:+0.0
 
 instance CharFunc Heston where
-	charfuncfactory (Heston v0 vf kappa volvol rho) t = f 
+	charfuncfactory (Heston v vt k sig corr) t = f 
 		where
 			f x = exp (b x + c x)
 			zeta x = -(x*x+i*x)/2.0
@@ -47,11 +47,11 @@ instance CharFunc Heston where
 			convert x = x:+0.0
 			i = 0.0:+1.0
 			tc = convert t
-			vol = convert v0
-			kapc = convert kappa
-			rhoc = convert rho
-			vfc = convert vf
-			volvolc = convert volvol
+			vol = convert v
+			kapc = convert k
+			rhoc = convert corr
+			vfc = convert vt
+			volvolc = convert sig
 
 class Discretize a where
 	evolve ::  YieldCurve Double->
@@ -66,14 +66,14 @@ class Discretize a where
 		   Double->            
 		   Int->               
 		   State (MCState a) [Double]
-	genpath rf div t1 t2 intervals = do
+	genpath rf dv t1 t2 intervals = do
 		let
 			genpath' lvls start 1 = do
-				newlevel <- evolve rf div start t2
+				newlevel <- evolve rf dv start t2
 				return (lvls++[newlevel])
 			genpath' lvls start n = do
 				let dt = (t2-start)/fromIntegral n
-				newlvl <- evolve rf div start (start+dt)
+				newlvl <- evolve rf dv start (start+dt)
 				genpath' (lvls++[newlvl]) (start+dt) (n-1)
 		genpath' [] t1 intervals
 				
@@ -85,43 +85,43 @@ randWrapper x = state f
 			where (randval, newrng) = fetchrand myrng x
 
 instance Discretize Lognormal where
-	evolve rf div t1 t2 = do
+	evolve rf dv t1 t2 = do
 		rand<-randWrapper Normal
 		internal<-get
 		let 
-			(model, rng, lvl) = unwrap internal
+			(modl, rng, lvl) = unwrap internal
 			t = t2-t1
-			r = forward rf t1 t2 - forward div t1 t2
-			vol = lnvolatility model
-			rate = (*) t (r-vol*vol*t/2.0)
-			newlvl = lvl*exp (rate+rand*vol*sqrt t)
-		put $ MCState model rng newlvl
+			r = forward rf t1 t2 - forward dv t1 t2
+			vol = lnvolatility modl
+			rt = (*) t (r-vol*vol*t/2.0)
+			newlvl = lvl*exp (rt+rand*vol*sqrt t)
+		put $ MCState modl rng newlvl
 		return newlvl
 
 instance Discretize Dupire where
-	evolve rf div t1 t2 = do
+	evolve rf dv t1 t2 = do
 		rand<-randWrapper Normal
 		internal<-get
 		let 
-			(model, rng, lvl) = unwrap internal
+			(modl, rng, lvl) = unwrap internal
 			t = t2-t1
-			r = forward rf t1 t2 - forward div t1 t2
-			lvol = localvol model rf div lvl t1
-			rate = (*) t (r-lvol*lvol*t/2.0)
-			newlvl = lvl*exp (rate+rand*lvol*sqrt t)
-		put $ MCState model rng newlvl
+			rt = forward rf t1 t2 - forward dv t1 t2
+			lvol = localvol modl rf dv lvl t1
+			r = (*) t (rt-lvol*lvol*t/2.0)
+			newlvl = lvl*exp (r+rand*lvol*sqrt t)
+		put $ MCState modl rng newlvl
 		return newlvl
 
 instance Discretize Heston where
-	evolve rf div t1 t2 = do
+	evolve rf dv t1 t2 = do
 		x<-randWrapper Normal
 		y<-randWrapper Normal
 		internal<-get
 		let 
-			(model, rng, lvl) = unwrap internal
-			(vinit, vfinal, kap, sigma, correl) = (\(Heston a b c d e)->(a,b,c,d,e)) model
+			(modl, rng, lvl) = unwrap internal
+			(vinit, vfinal, kap, sigma, correl) = (\(Heston a b c d e)->(a,b,c,d,e)) modl
 			z = x*correl+sqrt(1-correl*correl)*y
-			r = forward rf t1 t2 - forward div t1 t2
+			r = forward rf t1 t2 - forward dv t1 t2
 			t = t2-t1
 			newlvl = lvl * exp (r-vinit/2.0+x*sqrt (vinit*t))
 			newv = (sqrt vinit+sigma/2.0*z*sqrt t)^2-kap*(vinit-vfinal)*t-sigma*sigma*t/4.0
@@ -134,7 +134,7 @@ unwrap (MCState a b c) = (a,b,c)
 
 localvol :: (RealFloat a)=>Dupire a->YieldCurve a->YieldCurve a->a->a->a
 localvol (Dupire vs s) rcurve dcurve k t | w==0.0 || solution<0.0 = sqrt dwdt
-			                 | otherwise = sqrt solution
+			                 		     | otherwise = sqrt solution
 	where
 		discs tmat = (disc rcurve tmat, disc dcurve tmat)
 		(dr,dq) = discs t		
@@ -154,6 +154,6 @@ localvol (Dupire vs s) rcurve dcurve k t | w==0.0 || solution<0.0 = sqrt dwdt
 				(drmt, dqmt) = discs $ t-dt
 			in case t of
 				0.0->(var (strikept/s) (t+dt) -w)/dt
-				otherwise->(var (strikept/s) (t+dt)-var (strikemt/s) (t-dt))/2.0/dt
+				_->(var (strikept/s) (t+dt)-var (strikemt/s) (t-dt))/2.0/dt
 			
 		solution = dwdt/(1.0-y/w*dwdy+0.25*(-0.25-1.0/w+y*y/w/w)*dwdy*dwdy+0.5*d2wdy2)
