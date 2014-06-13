@@ -21,9 +21,9 @@ stripcurvelinearpar mats rates = LinearPar times $ recursivestrip times interpra
 		times = [0.5,1.0..40]
 		interprates = map interp times
 		interp = interpolate1d mats rates
-		recursivestrip [] [] _ = []
-		recursivestrip (t:ts) (x:xs) cumdisc = (-log disc/t):recursivestrip ts xs (disc+cumdisc)
-			where disc = (1.0-x/2.0*cumdisc)/(1.0+x/2.0)
+		recursivestrip (t:ts) (x:xs) cumdisc = (-log dsc/t):recursivestrip ts xs (dsc+cumdisc)
+			where dsc = (1.0-x/2.0*cumdisc)/(1.0+x/2.0)
+		recursivestrip _ _ _ = []
 
 --takes a par curve and uses a cubic spline on pars and linear on the log-discs
 stripcurvecubicparlogdisc :: (RealFloat a, Enum a, Ord a)=>[a]->[a]->YieldCurve a
@@ -31,9 +31,9 @@ stripcurvecubicparlogdisc mats rates = CubicParLinearLogDisc times $ recursivest
 	where
 		times = [0.5,1.0..40]
 		interprates = map (evalSpline (createSpline mats rates)) times
-		recursivestrip [] [] _ = []
-		recursivestrip (t:ts) (x:xs) cumdisc = log disc : recursivestrip ts xs (disc+cumdisc)
-			where disc = (1.0-x/2.0*cumdisc)/(1.0+x/2.0)
+		recursivestrip (t:ts) (x:xs) cumdisc = log dsc : recursivestrip ts xs (dsc+cumdisc)
+			where dsc = (1.0-x/2.0*cumdisc)/(1.0+x/2.0)
+		recursivestrip _ _ _ = []
 
 --takes a par curve and uses a cubic spline on pars cubic spline on rates
 stripcurvecubiccubic :: (RealFloat a, Enum a, Ord a)=>[a]->[a]->YieldCurve a
@@ -41,15 +41,15 @@ stripcurvecubiccubic mats rates = CubicParCubicSpot $ createSpline times $ recur
 	where
 		times = [0.5,1.0..40]
 		interprates = map (evalSpline (createSpline mats rates)) times
-		recursivestrip [] [] _ = []
-		recursivestrip (t:ts) (x:xs) cumdisc = (-log disc/t):recursivestrip ts xs (disc+cumdisc)
-			where disc = (1.0-x/2.0*cumdisc)/(1.0+x/2.0)
+		recursivestrip (t:ts) (x:xs) cumdisc = (-log dsc/t):recursivestrip ts xs (dsc+cumdisc)
+			where dsc = (1.0-x/2.0*cumdisc)/(1.0+x/2.0)
+		recursivestrip _ _ _ = []
 
 
 --calculates discount factors
 disc :: (RealFloat a, Ord a)=>YieldCurve a->a->a
 disc (LinearPar mats rates) t = exp $ (*) (-t) $ interpolate1d mats rates t
-disc (CubicParLinearLogDisc mats logdiscs) t = exp $ interpolate1d mats logdiscs t
+disc (CubicParLinearLogDisc mats ldiscs) t = exp $ interpolate1d mats ldiscs t
 disc (CubicParCubicSpot cs) t = exp $ (*) (-t) $ evalSpline cs t
 disc (FlatCurve r) t = exp $ -r*t
 

@@ -18,8 +18,8 @@ data Dupire a = Dupire { vols :: VolSurf a,
 			 			 s0   :: a} deriving (Show, Eq)
 
 data MCState a = MCState { model :: a Double, 
-			   rngstate :: PrefetchRands, 
-			   lvlstate :: Double }
+			   			   rngstate :: PrefetchRands, 
+			   			   lvlstate :: Double }
 
 class CharFunc a where
 	charfuncfactory :: (RealFloat b)=>a b->b->Complex b->Complex b
