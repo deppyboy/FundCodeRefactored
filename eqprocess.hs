@@ -1,6 +1,6 @@
 module EqProcess where
 
-import Data.Complex
+import Data.Complex (Complex (..))
 import YC
 import VolSurf
 import RNG
@@ -81,21 +81,20 @@ class Discretize a where
 randWrapper :: Distribution->State (MCState a) Double
 randWrapper x = state f
 	where 
-		f (MCState a1 myrng a3) = (randval, MCState a1 newrng a3)
-			where (randval, newrng) = fetchrand myrng x
+		f st = (randval, st {rngstate = newrng})
+			where (randval, newrng) = fetchrand (rngstate st) x
 
 instance Discretize Lognormal where
 	evolve rf dv t1 t2 = do
 		rand<-randWrapper Normal
 		internal<-get
 		let 
-			(modl, rng, lvl) = unwrap internal
 			t = t2-t1
 			r = forward rf t1 t2 - forward dv t1 t2
-			vol = lnvolatility modl
+			vol = lnvolatility $ model internal
 			rt = (*) t (r-vol*vol*t/2.0)
-			newlvl = lvl*exp (rt+rand*vol*sqrt t)
-		put $ MCState modl rng newlvl
+			newlvl = lvlstate internal*exp (rt+rand*vol*sqrt t)
+		put $ internal {lvlstate = newlvl}
 		return newlvl
 
 instance Discretize Dupire where
@@ -103,13 +102,12 @@ instance Discretize Dupire where
 		rand<-randWrapper Normal
 		internal<-get
 		let 
-			(modl, rng, lvl) = unwrap internal
 			t = t2-t1
 			rt = forward rf t1 t2 - forward dv t1 t2
-			lvol = localvol modl rf dv lvl t1
+			lvol = localvol (model internal) rf dv (lvlstate internal) t1
 			r = (*) t (rt-lvol*lvol*t/2.0)
-			newlvl = lvl*exp (r+rand*lvol*sqrt t)
-		put $ MCState modl rng newlvl
+			newlvl = lvlstate internal*exp (r+rand*lvol*sqrt t)
+		put $ internal {lvlstate = newlvl}
 		return newlvl
 
 instance Discretize Heston where
@@ -118,19 +116,16 @@ instance Discretize Heston where
 		y<-randWrapper Normal
 		internal<-get
 		let 
-			(modl, rng, lvl) = unwrap internal
-			(vinit, vfinal, kap, sigma, correl) = (\(Heston a b c d e)->(a,b,c,d,e)) modl
+			(vinit, vfinal, kap, sigma, correl) = (\(Heston a b c d e)->(a,b,c,d,e)) (model internal)
 			z = x*correl+sqrt(1-correl*correl)*y
 			r = forward rf t1 t2 - forward dv t1 t2
 			t = t2-t1
-			newlvl = lvl * exp (r-vinit/2.0+x*sqrt (vinit*t))
-			newv = (sqrt vinit+sigma/2.0*z*sqrt t)^2-kap*(vinit-vfinal)*t-sigma*sigma*t/4.0
+			newlvl = lvlstate internal * exp (r-vinit/2.0+x*sqrt (vinit*t))
+			newv = (sqrt vinit+sigma/2.0*z*sqrt t)^(2::Integer)-kap*(vinit-vfinal)*t-sigma*sigma*t/4.0
 			flipv = if newv>0.0 then newv else -newv
-		put (MCState (Heston flipv vfinal kap sigma correl) rng newlvl)
+		put $ internal { model = (model internal) { v0 = flipv }, lvlstate = newlvl }
 		return newlvl
 
-unwrap :: MCState t-> (t Double, PrefetchRands, Double)
-unwrap (MCState a b c) = (a,b,c)
 
 localvol :: (RealFloat a)=>Dupire a->YieldCurve a->YieldCurve a->a->a->a
 localvol (Dupire vs s) rcurve dcurve k t | w==0.0 || solution<0.0 = sqrt dwdt
