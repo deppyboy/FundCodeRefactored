@@ -6,8 +6,8 @@ import qualified Data.Vector as V
 
 interpolate1d :: (Fractional a, Ord a) => [a]->[a]->a->a
 interpolate1d (x1:x2:xs) (y1:y2:ys) xval | xval<=x1 = y1
-					 | xval>=x2 = interpolate1d (x2:xs) (y2:ys) xval
-					 | otherwise = ((xval-x1)*y2+(x2-xval)*y1)/(x2-x1)
+					 					 | xval>=x2 = interpolate1d (x2:xs) (y2:ys) xval
+					 					 | otherwise = ((xval-x1)*y2+(x2-xval)*y1)/(x2-x1)
 interpolate1d _ (y1:_) _ = y1
 
 interpolate1dcubic :: (Fractional a, Ord a) => [a]->[a]->a->a
@@ -27,12 +27,10 @@ simpint f a b intervals =
                   fy = V.map f $ V.enumFromStepN a dx (intervals+1)
                   fx = V.map f $ V.enumFromStepN (a-0.5*dx) dx (intervals+1)
 
-newtonmethod :: (Enum a, Floating a, Ord a)=>(a->a)->a->a->a->a->a
-newtonmethod f target guess tol perturb | abs diff < tol = guess
-					| dydx == 0.0 = newtonmethod f target (guess+perturb) tol perturb
-					| otherwise = newtonmethod f target newguess tol perturb
+newtonmethod :: (Enum a, Floating a, Ord a)=>(a->a)->a->a->a->a->Maybe a
+newtonmethod f target guess tol perturb | abs (target - f guess) < tol = Just guess
+										| dydx == 0.0 = Nothing
+										| otherwise = newtonmethod f target newguess tol perturb
 						where
-							fx = f guess
-							diff = target-fx
 							dydx = (f (guess+perturb) - f (guess-perturb))/2.0/perturb
-							newguess = guess-(fx-target)/dydx
+							newguess = guess-(f guess-target)/dydx
