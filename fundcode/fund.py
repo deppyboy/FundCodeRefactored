@@ -102,7 +102,7 @@ def avcache(funddate):
         cnxn = pyodbc.connect(ORACLESTRING)
         cursor = cnxn.cursor()
         sql = "SELECT Sum(Fund_Val) AS FundTotal FROM ODSACT.ACT_PRC_CONTRACT_FUND_VALUE WHERE GENERATION_DATE="
-        sql += oracledatebuilder(funddate) + " AND GENERATION_TYPE='W';"
+        sql += oracledatebuilder(funddate) + " AND GENERATION_TYPE='M';"
         cursor.execute(sql)
         row = cursor.fetchone()
         AVCACHE[funddate] = float(row[0])
@@ -199,7 +199,7 @@ class Fund:
         cnxn = pyodbc.connect(ORACLESTRING)
         cursor = cnxn.cursor()
         sql = "SELECT Sum(Fund_Val) AS FundTotal FROM ODSACT.ACT_PRC_CONTRACT_FUND_VALUE WHERE GENERATION_DATE="
-        sql += oracledatebuilder(date) + " AND GENERATION_TYPE='W' AND FUND_NO='" + str(self.fundcode) + "';"
+        sql += oracledatebuilder(date) + " AND GENERATION_TYPE='M' AND FUND_NO='" + str(self.fundcode) + "';"
         cursor.execute(sql)
         row = cursor.fetchone()
         cnxn.close()
@@ -443,6 +443,63 @@ class AdjFund(Fund):
         self.plot = self.stream.plot
         conn.close()
 
+class DivFund(Fund):
+    def __init__(self, fundcode, mapping=None, freq='D', forcedates=True, asofdate=datetime.datetime.now()):
+        """
+        Constructor for fund class.
+        
+        Parameters
+        ----------
+        fundcode : int
+            internal code for fund
+        mapping : dict (default None)
+            if None, mapping is pulled from database,
+            otherwise mapping can be specified.
+        freq : char (default 'D')
+            frequency of return calc for fund.
+            'D' for daily, 'W' for weekly, 'M' for monthly
+        forcedates : bool (default True)
+            if changefreq != 'D' then forcedates will ensure
+            that a return is reported on a weekly/monthly basis.
+        asofdate : datetime (default now())
+            as of date for mappings
+        
+        Note
+        ----
+        Will dividend adjust the return stream.  You're welcome.
+        """
+        conn = pyodbc.connect(ORACLESTRING)
+        c = conn.cursor()
+        sql = "SELECT * from TDEES.NAVS WHERE fundnum=%s ORDER BY navdate;" % str(fundcode)
+        c.execute(sql)
+        rows = c.fetchall()
+        dates = [row[1] for row in rows]
+        navs = scipy.array([float(row[2]) for row in rows])
+        divs = scipy.array([float(row[3]) for row in rows])
+        self.stream = streams.ReturnStream(dates[:-1], dates[1:], navs[1:]/navs[:-1]+divs[1:]-1.0)
+        if freq != 'D': self.stream = self.stream.changefreq(freq, forcedates=forcedates)
+        self.freq = freq
+        if mapping:
+            self.mapping = mapping
+        else:
+            sql = 'SELECT * FROM ODSACT.ACT_SRC_FUND_MAPPING WHERE FUND_NO=' + str(fundcode) + ';'
+            c.execute(sql)
+            for row in c.fetchall():
+                if asofdate < row.END_DATE and asofdate >= row.START_DATE:
+                    self.mapping = {'TBILL' : float(row.CASH),
+                                    'AGG'   : float(row.BOND),
+                                    'RTY'   : float(row.SMALL_CAP),
+                                    'SPX'   : float(row.LARGE_CAP),
+                                    'EAFE'  : float(row.INTERNATIONAL)}
+        if not('mapping' in dir(self)):
+            self.mapping = None
+        self.company = 101
+        self.mnemonic = 'NAVADJUSTED'
+        self.fundcode = fundcode
+        self.plot = self.stream.plot
+        conn.close()
+
+
 # these are the funds that aren't available for PNDY.  See the AdjFund Note for more detail.
 basefunds = [825, 826, 827, 850, 851, 852, 853, 875, 876, 877, 878, 879, 880, 881, 884, 885, 886, 887, 888, 923, 995]
         
@@ -467,16 +524,12 @@ def graballandoutput(startdate, enddate, mktbasket, avdate, asofdate=datetime.da
     sql = 'delete from fundoutput;'
     cursor.execute(sql)
     cnxn.commit()
-    sql = 'select fundnum from funddatanew group by fundnum;'
+    sql = 'select fundnum from navs group by fundnum;'
     cursor.execute(sql)
     fundnums = [int(row[0]) for row in cursor.fetchall()]
     for fundnum in fundnums:
         print fundnum
-        #if fundnum in basefunds:
-            #f = Fund(101, 'BASENAV', fundnum, asofdate=asofdate)
-        #else:
-            #f = AdjFund(fundnum, asofdate=asofdate)  # changed it out, obviously
-        f = Fund(101, 'BASENAV', fundnum, asofdate=asofdate)
+        f = DivFund(fundnum, asofdate=asofdate)
         f.stats(startdate, enddate, mktbasket, avdate, output=True)
     cnxn.close()
 
@@ -516,15 +569,15 @@ def errreport(startdate, enddate, threshold=0.03):
     
 if __name__ == '__main__':
     #delta = getdelta(datetime.datetime(2014,1,31))
-    #mkt = streams.getmarketdatadb()
-    # startdt = datetime.datetime(2000,1,1)
-    # enddt = datetime.datetime(2013,6,28)
+    mkt = streams.getmarketdatadb()
+    startdt = datetime.datetime(2013,12,31)
+    enddt = datetime.datetime(2014,3,31)
     #startdt = datetime.datetime(2013, 9, 30)
     #enddt = datetime.datetime(2013, 12, 31)
     #myavdate = datetime.datetime(2013,9,27)
-    #graballandoutput(startdt,enddt,mkt,avdate=myavdate,asofdate=enddt)
+    graballandoutput(startdt,enddt,mkt,avdate=startdt,asofdate=datetime.datetime(2014,2,1))
     #importdata()
-    x = Fund()
+    #x = Fund()
     # errreport(startdt,enddt,threshold=0.05)
     # myf = Fund(101,'BASENAV',878)
     # myf.stats(startdt,enddt,mkt)
