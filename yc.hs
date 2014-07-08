@@ -5,13 +5,13 @@ import CubicSpline
 
 data YieldCurve a = LinearPar	 {  lpmats  :: [a], 
                  	            linearrates :: [a] }   |
-		    CubicParLinearLogDisc
-				 {  ldmats :: [a],
-				    logdiscs :: [a] }      | 
-		    CubicParCubicSpot
-				 {  cspline :: CSpline a } |
-		    FlatCurve { rate :: a }
-			 deriving (Show, Eq)
+		    		CubicParLinearLogDisc
+				 				 {  ldmats :: [a],
+				    				logdiscs :: [a] }      | 
+		    		CubicParCubicSpot
+				 				 {  cspline :: CSpline a } |
+		    		FlatCurve { rate :: a }
+			 			deriving (Show, Eq)
 
 
 --takes a par curve uses lots of linear interpolation
