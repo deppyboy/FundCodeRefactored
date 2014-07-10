@@ -86,6 +86,21 @@ def importdata(filename=FILENAME, dbstring=ORACLESTRING, baseonly=True):
     conn.commit()
     conn.close()
 
+def getfundmapping(fundnum, date):
+    cnxn = pyodbc.connect(ORACLESTRING)
+    c = cnxn.cursor()
+    sql = 'SELECT * FROM ODSACT.ACT_SRC_FUND_MAPPING WHERE FUND_NO=' + str(fundnum) + ';'
+    c.execute(sql)
+    for row in c.fetchall():
+        if date <= row.END_DATE and date >= row.START_DATE:
+            return    {'TBILL'  : float(row.CASH),
+                        'AGG'   : float(row.BOND),
+                        'RTY'   : float(row.SMALL_CAP),
+                        'SPX'   : float(row.LARGE_CAP),
+                        'EAFE'  : float(row.INTERNATIONAL)}
+    return None
+
+
 def cachedelta(date):
     """Cached wrapper for getdelta."""
     if date in DELTACACHE.keys():
@@ -97,15 +112,18 @@ def cachedelta(date):
 def avcache(funddate):
     """Cached function to get the total AV as of funddate"""
     if funddate in AVCACHE.keys():
-		return AVCACHE[funddate]
+        return AVCACHE[funddate]
     else:
         cnxn = pyodbc.connect(ORACLESTRING)
         cursor = cnxn.cursor()
         sql = "SELECT Sum(Fund_Val) AS FundTotal FROM ODSACT.ACT_PRC_CONTRACT_FUND_VALUE WHERE GENERATION_DATE="
-        sql += oracledatebuilder(funddate) + " AND GENERATION_TYPE='M';"
+        sql += oracledatebuilder(funddate) + ";"
         cursor.execute(sql)
         row = cursor.fetchone()
-        AVCACHE[funddate] = float(row[0])
+	if row:
+            AVCACHE[funddate] = float(row[0])
+	else:
+	    AVCACHE[funddata] = 0.0
         cnxn.close()
         return AVCACHE[funddate]
 
@@ -149,22 +167,28 @@ class Fund:
         if mapping:
             self.mapping = mapping
         else:
-            sql = 'SELECT * FROM ODSACT.ACT_SRC_FUND_MAPPING WHERE FUND_NO=' + str(fundcode) + ';'
-            c.execute(sql)
-            for row in c.fetchall():
-                if asofdate < row.END_DATE and asofdate >= row.START_DATE:
-                    self.mapping = {'TBILL' : float(row.CASH),
-                                    'AGG'   : float(row.BOND),
-                                    'RTY'   : float(row.SMALL_CAP),
-                                    'SPX'   : float(row.LARGE_CAP),
-                                    'EAFE'  : float(row.INTERNATIONAL)}
-        if not('mapping' in dir(self)):
-            self.mapping = None
+            self.mapping = getfundmapping(fundcode, asofdate)
         self.company = company
         self.mnemonic = mnemonic
         self.fundcode = fundcode
         self.plot = self.stream.plot
         conn.close()
+
+    def project(self, mktbasket):
+        inputmatrix, fundreturns, indexes, daterange, dates = self.align(datetime.datetime(2000,1,1), datetime.datetime(2099,1,1), mktbasket)
+        if inputmatrix is None: return None, None
+        outdates, actuals, projecteds = [], [], []
+        for i, dte in enumerate(dates):
+            mapping = getfundmapping(self.fundcode, dte)
+            if mapping:
+                outdates.append(dte)
+                actuals.append(fundreturns[i])
+                weightarray = scipy.array([mapping[key] for key in indexes])
+                projecteds.append(sum(weightarray*inputmatrix[i]))
+        prior = outdates[0]-datetime.timedelta(days=1)
+        return streams.ReturnStream([prior]+outdates[:-1], outdates, scipy.array(actuals).flatten()), \
+            streams.ReturnStream([prior]+outdates[:-1], outdates, scipy.array(projecteds).flatten())
+
 
     def backtest(self, trainstart, trainend, backteststart, backtestend, mktbasket):
         """
@@ -250,13 +274,14 @@ class Fund:
             hybridstream.append(mktbasket[index][startdate:enddate])
             indexes.append(index)
         getdates = self.stream.overlap(hybridstream)
-        if not(getdates) or len(getdates) < 3:
-            return None, None, None, None        daterange = [getdates[0], getdates[-1]]
+        if not(getdates):
+            return None, None, None, None
+        daterange = [getdates[0], getdates[-1]]
         fundreturns = self.stream.datereturns(getdates).returns
         indexreturns = [indexstream.datereturns(getdates).returns for indexstream in hybridstream]
         inputmatrix = scipy.vstack(indexreturns).T
         fundreturns = fundreturns.reshape(fundreturns.size, 1)
-        return inputmatrix, fundreturns, indexes, daterange
+        return inputmatrix, fundreturns, indexes, daterange, getdates
 
     def regress(self, startdate, enddate, mktbasket):
         """
@@ -280,12 +305,14 @@ class Fund:
         ---- -------
         Also pushes the mapping into the class.
         """
-        inputmatrix, fundreturns, indexes, daterange = self.align(startdate, enddate, mktbasket)
+        inputmatrix, fundreturns, indexes, daterange, _ = self.align(startdate, enddate, mktbasket)
         if inputmatrix is None:
             self.mapping = None
-            return None        def SSE(beta):
+            return None
+        def SSE(beta):
             return scipy.sum((scipy.dot(inputmatrix, beta.reshape(len(indexes), 1)) - fundreturns) ** 2.0)
-        sumconstraint = lambda beta : 1.0 - sum(beta)        guess = scipy.asarray([1.0] + [0.0] * (len(indexes) - 1))
+        sumconstraint = lambda beta : 1.0 - sum(beta)
+        guess = scipy.asarray([1.0] + [0.0] * (len(indexes) - 1))
         bounds = [(0.0, 1.0) for i in range(0, len(indexes))]
         finalbeta = scipy.optimize.fmin_slsqp(SSE, guess, eqcons=[sumconstraint], bounds=bounds, iprint=0, acc=1E-20)
         self.mapping = {}
@@ -313,9 +340,9 @@ class Fund:
         stats : dict
             dictionary of statistics
         """
-        inputmatrix, fundreturns, indexes, daterange = self.align(startdate, enddate, mktbasket)
+        inputmatrix, fundreturns, indexes, daterange, _ = self.align(startdate, enddate, mktbasket)
         if self.mapping and not(inputmatrix is None):
-            weights = scipy.array([self.mapping[mykey] if mykey in self.mapping else 0.0 for mykey in mktbasket.keys()])
+            weights = scipy.array([self.mapping[mykey] if mykey in self.mapping else 0.0 for mykey in indexes])
             projected = scipy.dot(inputmatrix, weights.reshape(len(indexes), 1)).flatten()
             actual = fundreturns.flatten()
             diff = actual - projected
@@ -346,7 +373,60 @@ class Fund:
             return outdata
         else:
             return None
-    
+
+    def statsnew(self, startdate, enddate, mktbasket, avdate, output=False):
+        """
+        Calculates statistics for a fund over a period.
+        
+        Parameters
+        ----------
+        startdate : datetime
+            beginning of statistic period
+        enddate : datetime
+            end of statistic period
+        mktbasket : dict
+            dictionary of market streams
+        output : bool
+            if True, output results to db
+        
+        Returns
+        -------
+        stats : dict
+            dictionary of statistics
+        """
+        actualstream, projstream = self.project(mktbasket)
+        if actualstream is None: return None
+        if projstream is None: return None 
+        actual = actualstream[startdate:enddate].returns
+        projected = projstream[startdate:enddate].returns
+        diff = actual - projected
+        outdata = {
+                 'TE'     : scipy.std(diff) * 100.0 * 100.0,
+                 'BETA'   : scipy.cov(projected, actual, bias=1)[1, 0] / scipy.var(projected),
+                 'ALPHA'  : (scipy.product(diff + 1.0)) ** (1.0 / diff.size) - 1.0,
+                 'VOL'    : scipy.std(actual) * scipy.sqrt(252.0),
+                 'PROJ'   : scipy.product(1.0 + projected) - 1.0,
+                 'ACT'    : scipy.product(1.0 + actual) - 1.0,
+                 'R2'     : 0.0 if scipy.all(actual == 0.0) else scipy.corrcoef(projected, actual)[1, 0] ** 2.0,
+                 'AV'     : self.av(avdate),
+                 'DELTA'  : self.deltaestimate(avdate)
+                }
+        outdata['DIFF'] = outdata['ACT'] - outdata['PROJ']
+        outdata['PL'] = outdata['DELTA'] * outdata['DIFF'] * 100.0 
+        if output:
+            cnxn = pyodbc.connect(ORACLESTRING)
+            cursor = cnxn.cursor()
+            sql = 'INSERT INTO FUNDOUTPUT VALUES ({0!s},{1!s},{2!s},{3!s},{4!s},{5!s},{6},{7},{8!s},{9!s},{10!s},{11!s},{12!s},{13!s});'
+            sql = sql.format(self.fundcode, outdata['PROJ'], outdata['ACT'], outdata['DIFF'],
+                       outdata['DELTA'], outdata['PL'], oracledatebuilder(startdate),
+                       oracledatebuilder(enddate), outdata['TE'], outdata['R2'], outdata['BETA'],
+                       outdata['ALPHA'], outdata['VOL'], outdata['AV'])
+            cursor.execute(sql)
+            cnxn.commit()
+            cnxn.close()
+        return outdata
+
+
     def error(self, startdate, enddate, threshold=0.03):
         """
         Checks for possible erroneous returns.
@@ -572,10 +652,14 @@ if __name__ == '__main__':
     mkt = streams.getmarketdatadb()
     startdt = datetime.datetime(2013,12,31)
     enddt = datetime.datetime(2014,3,31)
+    f = DivFund(973, asofdate=startdt)
+    mbasket = streams.getmarketdatadb()
+    te1 = f.statsnew(startdt, enddt, mkt, startdt, output=False)
+    te2 = f.stats(startdt, enddt, mkt, startdt, output=False)
     #startdt = datetime.datetime(2013, 9, 30)
     #enddt = datetime.datetime(2013, 12, 31)
     #myavdate = datetime.datetime(2013,9,27)
-    graballandoutput(startdt,enddt,mkt,avdate=startdt,asofdate=datetime.datetime(2014,2,1))
+    #graballandoutput(startdt,enddt,mkt,avdate=startdt,asofdate=datetime.datetime(2014,2,1))
     #importdata()
     #x = Fund()
     # errreport(startdt,enddt,threshold=0.05)
