@@ -92,7 +92,7 @@ class ReturnStream:
             if startdate in self.startdates:
                 startindex = self.startdates.index(startdate)
             elif startdate<self.startdates[0]:
-                startindex = self.startdates[0]
+                startindex = 0
             else:
                 while not(startdate in self.startdates):
                     startdate = startdate + datetime.timedelta(days=1)
