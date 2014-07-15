@@ -63,6 +63,9 @@ dateReturns datevals rs = createFromTuple $ dateReturns' 1 rs datevals
 					 	        dateReturns' 1 (ReturnStream (st2:sts) eds rts) (dt2 : dts)
 					    | dt2 > ed = dateReturns' (accum*(1+rt)) (ReturnStream (st1:sts) eds rts) ds
 						| otherwise = []
+		dateReturns' accum (ReturnStream (st:_) (ed:_) (rt:_)) (dt1:dt2:_)
+			| st == dt1 && ed == dt2 = [(st,ed,accum*(1+rt)-1)]
+			| otherwise = []
 		dateReturns' _ _ _ = []
 
 createFromTuple :: [(Day, Day, Double)] -> ReturnStream
@@ -170,7 +173,7 @@ elementWise :: (Double -> Double) -> ReturnStream -> ReturnStream
 elementWise f (ReturnStream sts eds rets) = ReturnStream sts eds $ map f rets
 
 logconvert :: ReturnStream -> ReturnStream
-logconvert = elementWise (\x->log $ 1+x)
+logconvert = elementWise (log.(+1))
 
 weeklyFreq :: ReturnStream -> Int -> ReturnStream
 weeklyFreq rs dayval = createFromTuple $ weeklyFreq' rs dayval
