@@ -6,6 +6,7 @@ import Database.HDBC
 import Database.HDBC.ODBC
 import Data.Time
 import Data.List
+import Data.Maybe
 import Control.Monad.Trans.Maybe
 
 report :: Day -> Day -> IO ()
@@ -13,13 +14,10 @@ report stdt eddt = do
 	conn <- connectODBC cstring
 	let sql = "SELECT fund_no from odsact.act_src_fund_codes group by fund_no order by fund_no;"
 	result <- runMaybeT $ prepareAndGrab conn sql
-	case result of 
-		Just res -> do
-			let 
-				fundlist = map ((\x->fromSql x :: Int) . head) res
-				f x = reportfund stdt eddt x conn
-			mapM_ f fundlist
-		Nothing -> putStrLn "Failure."
+	let 
+		fundlist = map ((\x->fromSql x :: Int) . head) (fromJust result)
+		f x = reportfund stdt eddt x conn
+	mapM_ f fundlist
 
 
 reportfund :: IConnection conn => Day -> Day -> Int -> conn -> IO ()
