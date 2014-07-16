@@ -6,19 +6,20 @@ import Database.HDBC
 import Database.HDBC.ODBC
 import Data.Time
 import Data.List
+import Control.Monad.Trans.Maybe
 
 report :: Day -> Day -> IO ()
 report stdt eddt = do
 	conn <- connectODBC cstring
 	let sql = "SELECT fund_no from odsact.act_src_fund_codes group by fund_no order by fund_no;"
-	result <- prepareAndGrab conn sql
-	case result of
+	result <- runMaybeT $ prepareAndGrab conn sql
+	case result of 
 		Just res -> do
 			let 
 				fundlist = map ((\x->fromSql x :: Int) . head) res
 				f x = reportfund stdt eddt x conn
 			mapM_ f fundlist
-		Nothing -> return ()
+		Nothing -> putStrLn "Failure."
 
 
 reportfund :: IConnection conn => Day -> Day -> Int -> conn -> IO ()
@@ -26,8 +27,8 @@ reportfund stdt eddt fundnum conn = do
 	putStrLn $ "Running report for #" ++ show fundnum
 	let sql = "delete from quickreport where fundnum="++show fundnum++";"
 	_ <- prepareAndExecute conn sql
-	outval <- getActExp conn fundnum
-	case outval of
+	outdata <- runMaybeT $ getActExp conn fundnum
+	case outdata of
 		Just (a, e) -> do
 			let
 				aslice = getSlice a stdt eddt
@@ -41,4 +42,4 @@ reportfund stdt eddt fundnum conn = do
 				sql' = "INSERT INTO QUICKREPORT VALUES("++show fundnum++","++
 					intercalate "," (map show [aret, eret, aret-eret, trackerr, vol, bta']) ++ ");"
 			prepareAndExecute conn sql'
-		Nothing -> return ()
+		Nothing -> putStrLn "No data for fund."
