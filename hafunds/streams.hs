@@ -116,7 +116,7 @@ alpha :: ReturnStream -> ReturnStream -> Double
 alpha = olArgs ((-) `on` totalret)
 
 totalret :: ReturnStream -> Double
-totalret x = foldl1' (*) (returnVals $ x <+> 1)-1.0
+totalret x = foldl1safe (*) (returnVals $ x <+> 1)-1.0
 
 olArgs :: (ReturnStream -> ReturnStream -> t) -> ReturnStream -> ReturnStream -> t
 olArgs f x y = f olx oly
@@ -134,6 +134,11 @@ max = maximum . returnVals
 
 min :: ReturnStream -> Double
 min = minimum . returnVals
+
+foldl1safe :: (Double->Double->Double)->[Double]->Double
+foldl1safe op x = case x of
+	[] -> 1.0
+	_ -> foldl1' op x
 
 instance Num ReturnStream where
 	(+) = binOp (+)
