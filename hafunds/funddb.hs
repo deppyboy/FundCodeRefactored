@@ -70,7 +70,6 @@ getMapping conn date fundnum = do
 		weights = map numReader $ head outvals
 	return [Mapping st wt | (st, wt) <- zip strings weights]
 			
-
 projStream :: IConnection conn => conn -> Int -> MaybeT IO ReturnStream
 projStream conn fundnum = do
 	funddata <- loadFund conn fundnum
@@ -82,10 +81,3 @@ projStream conn fundnum = do
 	mappings <- mapM (\x->getMapping conn x fundnum) $ tail oldates
 	let rets = proj oldates mappings
 	return $ ReturnStream (init oldates) (tail oldates) rets
-
-getActExp :: IConnection conn => conn -> Int -> MaybeT IO (ReturnStream, ReturnStream)
-getActExp conn num = do
-	actual <- loadFund conn num
-	expected <- projStream conn num
-	return (actual, expected)
-		
