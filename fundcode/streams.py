@@ -192,26 +192,6 @@ class BasicStream(ReturnStream):
         else:
             return 1E-7
         
-def hybridstream(dates1,dates2,quotes1,quotes2):
-    """
-    Creates a new stream that represents the maximum of two other basic streams.
-    
-    Parameters
-    ----------
-    dates1, dates2 : list of datetimes
-        dates for both streams
-    quotes1, quotes2 : 1-d array
-        quotes for both streams
-    """
-    st1 = BasicStream(dates1,quotes1)
-    st2 = BasicStream(dates2,quotes2)
-    overlapdts = st1.overlap([st2])
-    ol1 = st1.datereturns(overlapdts)
-    ol2 = st2.datereturns(overlapdts)
-    greatret = (ol1.returns>=ol2.returns)*ol1.returns+(ol2.returns>ol1.returns)*ol2.returns
-    return ReturnStream(ol1.startdates,ol1.enddates,greatret)
-        
-
 def getmarketdatadb(connectstring=ORACLESTRING):
     """Grabs the available market data out of the database,
     and puts it into a dictionary of return streams."""
@@ -232,25 +212,3 @@ def getmarketdatadb(connectstring=ORACLESTRING):
               'EAFE'    : BasicStream(dates,scipy.asarray(eafe)),
               'AGG'     : BasicStream(dates,scipy.asarray(agg)),
               'TBILL'   : BasicStream(dates,scipy.asarray(tbill))}
-
-def parsemarketfile(filename):
-    """Parses market data out of a file into a dictionary of streams."""
-    f = open(filename)
-    csvparser = csv.reader(f)
-    names,dates,quotes, streambasket = [], {}, {}, {}
-    for row in csvparser:
-        if len(names)==0:
-            indexcount = len(row)/2
-            for i in range(0,indexcount):
-                indexname = row[2*i+1]
-                names.append(indexname)
-                dates[indexname] = []
-                quotes[indexname] = []
-        else:
-            for i in range(0,indexcount):
-                if row[2*i]:
-                    dates[names[i]].append(datetime.datetime.strptime(row[2*i],'%Y%m%d'))
-                    quotes[names[i]].append(float(row[2*i+1]))
-    for index in names:
-        streambasket[index] = BasicStream(dates[index],scipy.asarray(quotes[index]))
-    return streambasket
