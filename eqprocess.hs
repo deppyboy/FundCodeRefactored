@@ -136,7 +136,7 @@ localvol (Dupire vs s) rcurve dcurve k t | w==0.0 || solution<0.0 = sqrt dwdt
 		f = s*dq/dr
 		y = log $ k/f
 		dy = 1.0E-6
-		[kp, km] = map (*k) [exp dy, 1/exp dy]
+		[kp, km] = [k*exp dy, k/exp dy]
 		[w, wp, wm] = map (\x->var (x/s) t) [k, kp, km]
 		dwdy = (wp-wm)/2.0/dy
 		d2wdy2 = (wp-2.0*w+wm)/dy/dy

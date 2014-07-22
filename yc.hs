@@ -31,7 +31,7 @@ stripcurvecubicparlogdisc mats rates = CubicParLinearLogDisc times $ recursivest
 	where
 		times = [0.5,1.0..40]
 		interprates = map (evalSpline (createSpline mats rates)) times
-		recursivestrip (t:ts) (x:xs) cumdisc = log dsc : recursivestrip ts xs (dsc+cumdisc)
+		recursivestrip (_:ts) (x:xs) cumdisc = log dsc : recursivestrip ts xs (dsc+cumdisc)
 			where dsc = (1.0-x/2.0*cumdisc)/(1.0+x/2.0)
 		recursivestrip _ _ _ = []
 

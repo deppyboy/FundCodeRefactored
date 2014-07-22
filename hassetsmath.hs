@@ -9,6 +9,7 @@ interpolate1d (x1:x2:xs) (y1:y2:ys) xval | xval<=x1 = y1
 					 					 | xval>=x2 = interpolate1d (x2:xs) (y2:ys) xval
 					 					 | otherwise = ((xval-x1)*y2+(x2-xval)*y1)/(x2-x1)
 interpolate1d _ (y1:_) _ = y1
+interpolate1d _ _ _ = error "Trying to interpolate on empty yield curve."
 
 interpolate1dcubic :: (Fractional a, Ord a) => [a]->[a]->a->a
 interpolate1dcubic xs ys = evalSpline (createSpline xs ys)
