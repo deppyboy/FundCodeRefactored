@@ -95,7 +95,7 @@ basketGet _ _ = Nothing
 
 --Operations on ReturnStreams.
 cov :: ReturnStream -> ReturnStream -> Double
-cov = olArgs (\x y->adjmean $ (x <-> mean x) * (y <-> mean y))
+cov = olArgs $ \x y->adjmean $ (x <-> mean x) * (y <-> mean y)
 
 var :: ReturnStream -> Double
 var a = cov a a
@@ -122,7 +122,7 @@ olArgs :: (ReturnStream -> ReturnStream -> t) -> ReturnStream -> ReturnStream ->
 olArgs f x y = f olx oly
 	where [olx, oly] = overlap [x,y]
 
-binOp :: (Double->Double->Double) -> ReturnStream -> ReturnStream -> ReturnStream
+binOp :: (Double -> Double -> Double) -> ReturnStream -> ReturnStream -> ReturnStream
 binOp f a b = ReturnStream (startDates ol1) (endDates ol1) $ zipWith f rets1 rets2 
 	where
 		[ol1, ol2] = overlap [a,b]
@@ -136,9 +136,8 @@ min :: ReturnStream -> Double
 min = minimum . returnVals
 
 foldl1safe :: (Double->Double->Double)->[Double]->Double
-foldl1safe op x = case x of
-	[] -> 1.0
-	_ -> foldl1' op x
+foldl1safe _ [] = 1.0
+foldl1safe op x = foldl1' op x
 
 instance Num ReturnStream where
 	(+) = binOp (+)
