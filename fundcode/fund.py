@@ -128,18 +128,12 @@ def avcache(funddate):
         return AVCACHE[funddate]
 
 class Fund:
-    def __init__(self, company, mnemonic, fundcode, mapping=None,
-                 freq='D', forcedates=True, asofdate=datetime.datetime.now()):
+    def __init__(self, fundcode, mapping=None, freq='D', forcedates=True):
         """
         Constructor for fund class.
         
         Parameters
         ----------
-        company : 101 or 111
-            indicates PL or PL&A
-        mnemonic : string
-            product code - BASENAV for
-            pure NAVs
         fundcode : int
             internal code for fund
         mapping : dict (default None)
@@ -151,35 +145,53 @@ class Fund:
         forcedates : bool (default True)
             if changefreq != 'D' then forcedates will ensure
             that a return is reported on a weekly/monthly basis.
-        asofdate : datetime (default now())
-            as of date for mappings
+        
+        Note
+        ----
+        Will dividend adjust the return stream.  You're welcome.
         """
         conn = pyodbc.connect(ORACLESTRING)
         c = conn.cursor()
-        sql = "SELECT * from funddata WHERE company=101 and mnemonic='BASENAV' and fundnum=%s ORDER BY navdate;" % (str(fundcode))
+        sql = "SELECT * from TDEES.NAVS WHERE fundnum=%s ORDER BY navdate;" % str(fundcode)
         c.execute(sql)
         rows = c.fetchall()
-        dates = [row[2] for row in rows]
-        navs = [row[4] for row in rows]
-        self.stream = streams.BasicStream(dates, scipy.asarray(navs))
+        dates = [row[1] for row in rows]
+        navs = scipy.array([float(row[2]) for row in rows])
+        divs = scipy.array([float(row[3]) for row in rows])
+        self.stream = streams.ReturnStream(dates[:-1], dates[1:], navs[1:]/navs[:-1]+divs[1:]-1.0)
         if freq != 'D': self.stream = self.stream.changefreq(freq, forcedates=forcedates)
         self.freq = freq
-        if mapping:
-            self.mapping = mapping
-        else:
-            self.mapping = getfundmapping(fundcode, asofdate)
-        self.company = company
-        self.mnemonic = mnemonic
         self.fundcode = fundcode
         self.plot = self.stream.plot
         conn.close()
 
-    def project(self, mktbasket):
+
+    def project(self, mktbasket, mappingoverride = None):
+    	"""
+    	Projects the fund value based on the fund mappings for each period.
+
+    	Parameters
+    	----------
+    	mktbasket : dict of Streams
+    		market data
+    	mappingoverride : None or mapping dictionary
+    		mapping to use, or None if from db
+
+    	Returns 
+    	-------
+    	act : ReturnStream
+    		actual return stream
+    	exp : ReturnStream
+    		expected return stream
+    	"""
         inputmatrix, fundreturns, indexes, daterange, dates = self.align(datetime.datetime(2000,1,1), datetime.datetime(2099,1,1), mktbasket)
         if inputmatrix is None: return None, None
         outdates, actuals, projecteds = [], [], []
         for i, dte in enumerate(dates):
-            mapping = getfundmapping(self.fundcode, dte)
+            if not(mappingoverride):
+                mapping = getfundmapping(self.fundcode, dte)
+            else:
+                mapping = mappingoverride
             if mapping:
                 outdates.append(dte)
                 actuals.append(fundreturns[i])
@@ -211,13 +223,9 @@ class Fund:
         -------
         dictionary of statistics for backtesting period
         """
-        self.regress(trainstart, trainend, mktbasket)
-        return self.stats(backteststart, backtestend, mktbasket)     
+        mapping = self.regress(trainstart, trainend, mktbasket)
+        return self.stats(backteststart, backtestend, mktbasket, mappingoverride=mapping)     
    
-    def plotreturns(self):
-        """Plots actual accumulated fund returns."""
-        pylab.plot(self.stream.enddates, scipy.cumprod(1.0 + self.stream.returns))
-    
     def av(self, date):
         """Returns the fund's AV for a given date."""
         cnxn = pyodbc.connect(ORACLESTRING)
@@ -300,14 +308,9 @@ class Fund:
         -------
         mapping : dict
             new mapping
-        
-        Side Effects
-        ---- -------
-        Also pushes the mapping into the class.
         """
         inputmatrix, fundreturns, indexes, daterange, _ = self.align(startdate, enddate, mktbasket)
         if inputmatrix is None:
-            self.mapping = None
             return None
         def SSE(beta):
             return scipy.sum((scipy.dot(inputmatrix, beta.reshape(len(indexes), 1)) - fundreturns) ** 2.0)
@@ -315,12 +318,12 @@ class Fund:
         guess = scipy.asarray([1.0] + [0.0] * (len(indexes) - 1))
         bounds = [(0.0, 1.0) for i in range(0, len(indexes))]
         finalbeta = scipy.optimize.fmin_slsqp(SSE, guess, eqcons=[sumconstraint], bounds=bounds, iprint=0, acc=1E-20)
-        self.mapping = {}
-        for i in range(0, len(indexes)):
-            self.mapping[indexes[i]] = finalbeta[i]
-        return self.mapping
+        mapping = {}
+        for i, idx in enumerate(indexes):
+            mapping[idx] = finalbeta[i]
+        return mapping
 
-    def stats(self, startdate, enddate, mktbasket, avdate, output=False):
+    def stats(self, startdate, enddate, mktbasket, avdate, output=False, mappingoverride=None):
         """
         Calculates statistics for a fund over a period.
         
@@ -334,69 +337,17 @@ class Fund:
             dictionary of market streams
         output : bool
             if True, output results to db
+        mappingoverride : None or mapping dictionary
+        	whether to override the db mapping
         
         Returns
         -------
         stats : dict
             dictionary of statistics
         """
-        inputmatrix, fundreturns, indexes, daterange, _ = self.align(startdate, enddate, mktbasket)
-        if self.mapping and not(inputmatrix is None):
-            weights = scipy.array([self.mapping[mykey] if mykey in self.mapping else 0.0 for mykey in indexes])
-            projected = scipy.dot(inputmatrix, weights.reshape(len(indexes), 1)).flatten()
-            actual = fundreturns.flatten()
-            diff = actual - projected
-            outdata = {
-                     'TE'     : scipy.std(diff) * 100.0 * 100.0,
-                     'BETA'   : scipy.cov(projected, actual, bias=1)[1, 0] / scipy.var(projected),
-                     'ALPHA'  : (scipy.product(diff + 1.0)) ** (1.0 / diff.size) - 1.0,
-                     'VOL'    : scipy.std(actual) * scipy.sqrt(252.0),
-                     'PROJ'   : scipy.product(1.0 + projected) - 1.0,
-                     'ACT'    : scipy.product(1.0 + actual) - 1.0,
-                     'R2'     : 0.0 if scipy.all(actual == 0.0) else scipy.corrcoef(projected, actual)[1, 0] ** 2.0,
-                     'AV'     : self.av(avdate),
-                     'DELTA'  : self.deltaestimate(avdate)
-                    }
-            outdata['DIFF'] = outdata['ACT'] - outdata['PROJ']
-            outdata['PL'] = outdata['DELTA'] * outdata['DIFF'] * 100.0 
-            if output:
-                cnxn = pyodbc.connect(ORACLESTRING)
-                cursor = cnxn.cursor()
-                sql = 'INSERT INTO FUNDOUTPUT VALUES ({0!s},{1!s},{2!s},{3!s},{4!s},{5!s},{6},{7},{8!s},{9!s},{10!s},{11!s},{12!s},{13!s});'
-                sql = sql.format(self.fundcode, outdata['PROJ'], outdata['ACT'], outdata['DIFF'],
-                           outdata['DELTA'], outdata['PL'], oracledatebuilder(startdate),
-                           oracledatebuilder(enddate), outdata['TE'], outdata['R2'], outdata['BETA'],
-                           outdata['ALPHA'], outdata['VOL'], outdata['AV'])
-                cursor.execute(sql)
-                cnxn.commit()            
-                cnxn.close()
-            return outdata
-        else:
-            return None
-
-    def statsnew(self, startdate, enddate, mktbasket, avdate, output=False):
-        """
-        Calculates statistics for a fund over a period.
-        
-        Parameters
-        ----------
-        startdate : datetime
-            beginning of statistic period
-        enddate : datetime
-            end of statistic period
-        mktbasket : dict
-            dictionary of market streams
-        output : bool
-            if True, output results to db
-        
-        Returns
-        -------
-        stats : dict
-            dictionary of statistics
-        """
-        actualstream, projstream = self.project(mktbasket)
-        if actualstream is None: return None
-        if projstream is None: return None 
+        actualstream, projstream = self.project(mktbasket, mappingoverride)
+        if actualstream[startdate:enddate] is None: return None
+        if projstream[startdate:enddate] is None: return None 
         actual = actualstream[startdate:enddate].returns
         projected = projstream[startdate:enddate].returns
         diff = actual - projected
@@ -425,165 +376,8 @@ class Fund:
             cnxn.commit()
             cnxn.close()
         return outdata
-
-
-    def error(self, startdate, enddate, threshold=0.03):
-        """
-        Checks for possible erroneous returns.
-        
-        Parameters
-        ----------
-        startdate : datetime
-            beginning of check period
-        enddate : datetime
-            end of check period
-        threshold : float (default 0.03)
-            threshold to return an error
-        
-        Returns
-        -------
-        err : bool
-            if an error occurs, err is True,
-            else it's False.
-        errs : list
-            a list of (date,return) tuples
-            that exceed the threshold
-        """
-        dt, errs, err = startdate, [], False
-        while dt <= enddate:
-            ret = self.stream[dt]
-            if ret:
-                if abs(ret) > threshold:
-                    err = True
-                    errs.append((dt, ret))
-            dt += datetime.timedelta(days=1)
-        return err, errs
-            
-class AdjFund(Fund):
-    def __init__(self, fundcode, company=101, mapping=None, freq='D', forcedates=True, asofdate=datetime.datetime.now()):
-        """
-        Constructor for fund class.
-        
-        Parameters
-        ----------
-        fundcode : int
-            internal code for fund
-        company : 101 or 111 (default 101)
-            indicates PL or PL&A
-        mapping : dict (default None)
-            if None, mapping is pulled from database,
-            otherwise mapping can be specified.
-        freq : char (default 'D')
-            frequency of return calc for fund.
-            'D' for daily, 'W' for weekly, 'M' for monthly
-        forcedates : bool (default True)
-            if changefreq != 'D' then forcedates will ensure
-            that a return is reported on a weekly/monthly basis.
-        asofdate : datetime (default now())
-            as of date for mappings
-        
-        Note
-        ----
-        Only difference for this is that it replaces bad returns from the basenavs
-        with the NAVs from PNDY.  This is admittedly a hack, and I need to think of
-        a better solution in the future.
-        """
-        conn = pyodbc.connect(ORACLESTRING)
-        c = conn.cursor()
-        sql = "SELECT * from funddata WHERE company=%s and mnemonic='BASENAV' and fundnum=%s ORDER BY navdate;" % (str(company), str(fundcode))
-        c.execute(sql)
-        rows = c.fetchall()
-        datesbase = [row[2] for row in rows]
-        navsbase = [row[4] for row in rows]
-        sql = "SELECT * from funddata WHERE company=%s and mnemonic='PNDY' and fundnum=%s ORDER BY navdate;" % (str(company), str(fundcode))
-        c.execute(sql)
-        rows = c.fetchall()
-        datespndy = [row[2] for row in rows]
-        navspndy = [row[4] for row in rows]
-        self.stream = streams.hybridstream(datesbase, datespndy, scipy.array(navsbase), scipy.array(navspndy))
-        if freq != 'D': self.stream = self.stream.changefreq(freq, forcedates=forcedates)
-        self.freq = freq
-        if mapping:
-            self.mapping = mapping
-        else:
-            sql = 'SELECT * FROM ODSACT.ACT_SRC_FUND_MAPPING WHERE FUND_NO=' + str(fundcode) + ';'
-            c.execute(sql)
-            for row in c.fetchall():
-                if asofdate < row.END_DATE and asofdate >= row.START_DATE:
-                    self.mapping = {'TBILL' : float(row.CASH),
-                                    'AGG'   : float(row.BOND),
-                                    'RTY'   : float(row.SMALL_CAP),
-                                    'SPX'   : float(row.LARGE_CAP),
-                                    'EAFE'  : float(row.INTERNATIONAL)}
-        if not('mapping' in dir(self)):
-            self.mapping = None
-        self.company = company
-        self.mnemonic = 'ADJ'
-        self.fundcode = fundcode
-        self.plot = self.stream.plot
-        conn.close()
-
-class DivFund(Fund):
-    def __init__(self, fundcode, mapping=None, freq='D', forcedates=True, asofdate=datetime.datetime.now()):
-        """
-        Constructor for fund class.
-        
-        Parameters
-        ----------
-        fundcode : int
-            internal code for fund
-        mapping : dict (default None)
-            if None, mapping is pulled from database,
-            otherwise mapping can be specified.
-        freq : char (default 'D')
-            frequency of return calc for fund.
-            'D' for daily, 'W' for weekly, 'M' for monthly
-        forcedates : bool (default True)
-            if changefreq != 'D' then forcedates will ensure
-            that a return is reported on a weekly/monthly basis.
-        asofdate : datetime (default now())
-            as of date for mappings
-        
-        Note
-        ----
-        Will dividend adjust the return stream.  You're welcome.
-        """
-        conn = pyodbc.connect(ORACLESTRING)
-        c = conn.cursor()
-        sql = "SELECT * from TDEES.NAVS WHERE fundnum=%s ORDER BY navdate;" % str(fundcode)
-        c.execute(sql)
-        rows = c.fetchall()
-        dates = [row[1] for row in rows]
-        navs = scipy.array([float(row[2]) for row in rows])
-        divs = scipy.array([float(row[3]) for row in rows])
-        self.stream = streams.ReturnStream(dates[:-1], dates[1:], navs[1:]/navs[:-1]+divs[1:]-1.0)
-        if freq != 'D': self.stream = self.stream.changefreq(freq, forcedates=forcedates)
-        self.freq = freq
-        if mapping:
-            self.mapping = mapping
-        else:
-            sql = 'SELECT * FROM ODSACT.ACT_SRC_FUND_MAPPING WHERE FUND_NO=' + str(fundcode) + ';'
-            c.execute(sql)
-            for row in c.fetchall():
-                if asofdate < row.END_DATE and asofdate >= row.START_DATE:
-                    self.mapping = {'TBILL' : float(row.CASH),
-                                    'AGG'   : float(row.BOND),
-                                    'RTY'   : float(row.SMALL_CAP),
-                                    'SPX'   : float(row.LARGE_CAP),
-                                    'EAFE'  : float(row.INTERNATIONAL)}
-        if not('mapping' in dir(self)):
-            self.mapping = None
-        self.company = 101
-        self.mnemonic = 'NAVADJUSTED'
-        self.fundcode = fundcode
-        self.plot = self.stream.plot
-        conn.close()
-
-
-# these are the funds that aren't available for PNDY.  See the AdjFund Note for more detail.
-basefunds = [825, 826, 827, 850, 851, 852, 853, 875, 876, 877, 878, 879, 880, 881, 884, 885, 886, 887, 888, 923, 995]
-        
-def graballandoutput(startdate, enddate, mktbasket, avdate, asofdate=datetime.datetime.now()):
+   
+def graballandoutput(startdate, enddate, avdate):
     """
     Loads in all of the funds and runs statistics on them.
     Outputs results to the database.
@@ -596,9 +390,8 @@ def graballandoutput(startdate, enddate, mktbasket, avdate, asofdate=datetime.da
         end of statistic period
     mktbasket : dict
         dictionary of market streams
-    asofdate : datetime (default now())
-        date of mappings
     """
+    mktbasket = streams.getmarketdatadb()
     cnxn = pyodbc.connect(ORACLESTRING)
     cursor = cnxn.cursor()
     sql = 'delete from fundoutput;'
@@ -609,61 +402,11 @@ def graballandoutput(startdate, enddate, mktbasket, avdate, asofdate=datetime.da
     fundnums = [int(row[0]) for row in cursor.fetchall()]
     for fundnum in fundnums:
         print fundnum
-        f = DivFund(fundnum, asofdate=asofdate)
+        f = Fund(fundnum)
         f.stats(startdate, enddate, mktbasket, avdate, output=True)
-    cnxn.close()
-
-def errreport(startdate, enddate, threshold=0.03):
-    """
-    Runs the error report on all funds and outputs to the database.
-    
-    Parameters
-    ----------
-    startdate : datetime
-        beginning of error period
-    enddate : datetime
-        end of error period
-    threshold : float (default 0.03)
-        threshold to detect errors
-    """
-    cnxn = pyodbc.connect(ORACLESTRING)
-    cursor = cnxn.cursor()
-    cursor.execute('delete from funderrors;')
-    cursor.commit()
-    sql = 'select fundnum from funddata group by fundnum;'
-    cursor.execute(sql)
-    fundnums = [int(row[0]) for row in cursor.fetchall()]
-    for fundnum in fundnums:
-        print fundnum
-        if fundnum in basefunds:
-            f = Fund(101, 'BASENAV', fundnum)
-        else:
-            f = AdjFund(fundnum)
-        errval = f.error(startdate, enddate, threshold=threshold)
-        if errval[0]:
-            for myval in errval[1]:
-                sql = 'insert into funderrors values(' + str(fundnum) + ',' + oracledatebuilder(myval[0]) + ',' + str(myval[1]) + ');'
-                cursor.execute(sql)
-    cursor.commit()
     cnxn.close()
     
 if __name__ == '__main__':
-    #delta = getdelta(datetime.datetime(2014,1,31))
-    mkt = streams.getmarketdatadb()
     startdt = datetime.datetime(2013,12,31)
     enddt = datetime.datetime(2014,3,31)
-    f = DivFund(973, asofdate=startdt)
-    mbasket = streams.getmarketdatadb()
-    te1 = f.statsnew(startdt, enddt, mkt, startdt, output=False)
-    te2 = f.stats(startdt, enddt, mkt, startdt, output=False)
-    #startdt = datetime.datetime(2013, 9, 30)
-    #enddt = datetime.datetime(2013, 12, 31)
-    #myavdate = datetime.datetime(2013,9,27)
-    #graballandoutput(startdt,enddt,mkt,avdate=startdt,asofdate=datetime.datetime(2014,2,1))
-    #importdata()
-    #x = Fund()
-    # errreport(startdt,enddt,threshold=0.05)
-    # myf = Fund(101,'BASENAV',878)
-    # myf.stats(startdt,enddt,mkt)
-    #f = Fund(964)
-    #f.stats(startdt, enddt, mkt)
+    graballandoutput(startdt, enddt, enddt)
