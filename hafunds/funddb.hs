@@ -15,17 +15,13 @@ cstring = "DSN=OracleDB;PWD=tdees_6"
 prepareAndGrab :: IConnection conn => conn -> String -> MaybeT IO [[SqlValue]]
 prepareAndGrab conn sql = do
 	preparedsql <- lift $ prepare conn sql
-	_ <- lift $ execute preparedsql []
-	out <- lift $ fetchAllRows preparedsql
+	out <- lift $ execute preparedsql [] >> fetchAllRows preparedsql
 	case out of
 		[] -> fail "empty"
 		_ -> return out
 
 prepareAndExecute :: IConnection conn => conn -> String -> IO ()
-prepareAndExecute conn sql = do
-	preparedsql <- prepare conn sql
-	_ <- execute preparedsql []
-	commit conn
+prepareAndExecute conn sql = prepare conn sql >>= (\x -> execute x [] >> commit conn)
 
 oracleDateBuilder :: FormatTime t => t -> String
 oracleDateBuilder date = "TO_DATE('"++""++timerep++"','yyyymmdd')"
@@ -37,9 +33,11 @@ numReader x = if head a=='.' then read ('0':a) :: Double else read a :: Double
 
 loadFund :: IConnection conn => conn -> Int -> MaybeT IO ReturnStream
 loadFund conn fundnum = do
-		let sql = "SELECT NAVDATE, NAVVAL, DIV FROM TDEES.NAVS WHERE FUNDNUM="++show fundnum++ " ORDER BY NAVDATE;"
+		let sql = "SELECT NAVDATE, NAVVAL, DIV FROM TDEES.NAVS WHERE FUNDNUM="++
+			show fundnum++ " ORDER BY NAVDATE;"
 		outdata <- prepareAndGrab conn sql
-		let (dt, quotes, divs) = unzip3 [(fromSql a :: Day, numReader b, numReader c) | [a,b,c] <- outdata]
+		let (dt, quotes, divs) = unzip3 [(fromSql a :: Day, numReader b, numReader c) | 
+											[a,b,c] <- outdata]
 		return $ streamFromNAVDivs dt quotes divs
 		
 
