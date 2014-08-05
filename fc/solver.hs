@@ -6,7 +6,7 @@ import qualified Data.Set as S
 import Debug.Trace
 
 data Rank = Ace | Two | Three | Four | Five | Six | Seven | Eight |
-	Nine | Ten | Jack | Queen | King deriving (Show, Eq, Enum, Ord)
+	Nine | Ten | Jack | Queen | King | SuperKing deriving (Show, Eq, Enum, Ord)
 
 data Suit = Heart | Diamond | Club | Spade deriving (Show, Eq, Enum, Ord)
 
@@ -66,7 +66,6 @@ popFreeCell (Board cs fd fc) card = Board cs fd fc'
 
 
 playableCascade :: Stack -> Card -> Bool
-playableCascade (_:_) (Card King _) = False
 playableCascade (cd:_) pc = (black pc ==  red cd) && (rank cd == succ (rank pc))
 playableCascade _ _ = False
 
@@ -203,17 +202,19 @@ makeGame = do
 -- | Below code is just used to print a series of moves from a series of board states.
 data Location = Cascades | Foundations | FreeCells deriving (Show, Eq)
 
-data Move = Move Card Location Location  deriving Eq
+data Move = Move Card Location Location | NullMove deriving Eq
 
 instance Show Move where
 	show (Move (Card rk st) l1 l2) = show rk ++ " " ++ show st ++ ": " ++ show l1 ++ " -> " ++ show l2 ++ "\n"
+	show NullMove = ""
 
 diffBoards :: Board -> Board -> Move
 diffBoards (Board cs fd fc) 
 		   (Board cs' fd' fc') 
-		   		| length fdcontents /= length fdcontents' = Move (head $ diff fdcontents' fdcontents) source Foundations
+		   		| fdcontents /= fdcontents' = Move (head $ diff fdcontents' fdcontents) source Foundations
 		   		| length fc > length fc' = Move (head $ diff fc fc') FreeCells Cascades
 		   		| length fc < length fc' = Move (head $ diff fc' fc) Cascades FreeCells
+		   		| cscontents == cscontents' = NullMove
 		   		| otherwise = Move (diffList cscontents cscontents') Cascades Cascades
 					where 
 						source = if length fc > length fc' then FreeCells else Cascades
