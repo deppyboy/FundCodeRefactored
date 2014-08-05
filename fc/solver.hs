@@ -1,6 +1,5 @@
 import Data.List
 import Data.Maybe
-import Debug.Trace
 
 data Rank = Ace | Two | Three | Four | Five | Six | Seven | Eight |
 	Nine | Ten | Jack | Queen | King deriving (Show, Eq, Enum, Ord)
@@ -15,9 +14,6 @@ data Board = Board {
 		cascades :: [Stack],
 		foundations :: [Stack],
 		freecells :: Stack} deriving (Show, Eq)
-
-instance Ord Card where
-	(Card rk1 _) <= (Card rk2 _) = rk1 <= rk2
 
 red :: Card -> Bool
 red (Card _ Heart) = True
@@ -65,11 +61,11 @@ playableCascade :: Stack -> Card -> Bool
 playableCascade (cd:_) pc = (black pc ==  red cd) && (rank cd == succ (rank pc))
 playableCascade _ _ = True
 
-playableCascades :: [Stack] -> Card -> [Int]
-playableCascades stacks cd = findIndices (`playableCascade` cd) stacks
+playableCascades :: Board -> Card -> [Int]
+playableCascades (Board stacks _ _) cd = findIndices (`playableCascade` cd) stacks
 
-playableFoundation :: [Stack] -> Card -> Bool
-playableFoundation xs (Card rk st) = playableFoundation' (xs !! num)
+playableFoundation :: Board -> Card -> Bool
+playableFoundation (Board _ xs _) (Card rk st) = playableFoundation' (xs !! num)
 	where 
 		num = fromJust $ elemIndex st [Heart .. Spade]
 		playableFoundation' (x:_) = succ (rank x) == rk
@@ -81,9 +77,9 @@ playableFreecell (Board _ _ fc) = length fc < 4
 allCardPlays :: Board -> Card -> [Board]
 allCardPlays bd card = pf ++ fcplays ++ stackplays
 	where
-		pf = [pushFoundation bd card | playableFoundation (foundations bd) card]
+		pf = [pushFoundation bd card | playableFoundation bd card]
 		fcplays = [pushFreecell bd card | playableFreecell bd]
-		stackplays = map (pushCascade bd card) $ playableCascades (cascades bd) card
+		stackplays = map (pushCascade bd card) $ playableCascades bd card
 
 availableCascadeCards :: Board -> [Card]
 availableCascadeCards (Board cs _ _) = map head $ filter (not . null) cs
@@ -109,10 +105,10 @@ solver board = reverse $ solver' [board] [allPermissable board]
 	where
 		solver' bds ((guess:guesses):gs) | guess `elem` bds = solver' bds (guesses:gs)
 									     | solvedBoard guess = guess : bds
-							             | otherwise = trace (show $ allPermissable guess) $ solver' (guess:bds) (allPermissable guess:gs)
+							             | otherwise = solver' (guess:bds) (allPermissable guess:gs)
 		solver' (bd:bds) ([]:gs) | solvedBoard bd = bd : bds
 							     | otherwise = solver' bds gs
-		solver' x y = error (show x)
+		solver' _ _ = error "Puzzle is unsolvable."
 
 loadBoardFromText :: String -> Board
 loadBoardFromText rawtext = loadBoard (lines rawtext) (Board [] [[],[],[],[]] [])
@@ -138,7 +134,6 @@ parser ('K' : ks) = Card King $ suitParser ks
 parser ('A' : ks) = Card Ace $ suitParser ks
 parser x = error $ "Bad parse string: " ++ x
 
-
 suitParser :: String -> Suit
 suitParser "H" = Heart
 suitParser "C" = Club
@@ -152,11 +147,11 @@ deck = do
 	y <- [Heart .. Spade]
 	return $ Card x y
 
-main :: IO ()
+main :: IO [Board]
 main = do
 	x <- readFile "fc.txt"
 	let k = loadBoardFromText x
-	print $ solver k
+	return $ solver k
 
 m :: Board
 m = Board [[Card Two Heart]] [[Card Ace Heart], [], [], [Card Two Spade, Card Ace Spade]] []
