@@ -153,5 +153,10 @@ main = do
 	let k = loadBoardFromText x
 	return $ solver k
 
-m :: Board
-m = Board [[Card Two Heart]] [[Card Ace Heart], [], [], [Card Two Spade, Card Ace Spade]] []
+data Location = Cascades | Foundations | Freecells
+
+diffBoards (Board cs fd fc) (Board cs' fd' fc') | sum $ map length cs == sum $ map length cs' = case length fc > length fc' of 
+													True -> (head $ filter (not . (`elem` fc')) fc ,Foundations)
+													_ -> (head $ filter (not . (`elem` fc)) fc' , Foundations)
+												| length fc > length fc' = (head $ filter (not . (`elem` fc')) fc
+												| otherwise = head $ filter (not . (`elem` fc)) fc'
