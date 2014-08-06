@@ -2,6 +2,7 @@ import Data.List
 import Data.Maybe
 import System.Random
 import Control.Applicative ((<$>))
+import Data.Set (Set)
 import qualified Data.Set as S
 
 data Rank = Ace | Two | Three | Four | Five | Six | Seven | Eight |
@@ -12,7 +13,7 @@ data Suit = Heart | Diamond | Club | Spade deriving (Show, Eq, Enum, Ord)
 data Card = Card { rank :: Rank, suit :: Suit } deriving (Show, Eq, Ord)
 
 type Stack = [Card]
-type CardSet = S.Set Card
+type CardSet = Set Card
 
 data Board = Board {
 		cascades :: [Stack],
@@ -124,8 +125,8 @@ allPermissable bd = filter (/= bd) $ concatMap (uncurry allCardPlays) (zip board
 solvedBoard :: Board -> Bool
 solvedBoard (Board cs _ fc) = all null cs && S.null fc
 
-solver :: Board -> ([Move], [Board])
-solver board = (zipWith diffBoards (init solutionBoards) (tail solutionBoards), solutionBoards)
+solver :: Board -> (Solution, [Board])
+solver board = (Solution $ zipWith diffBoards (init solutionBoards) (tail solutionBoards), solutionBoards)
 	where
 		solutionBoards = reverse $ solver' [board] [allPermissable board]
 		solver' bds ((guess:guesses):gs) | guess `elem` bds = solver' bds (guesses:gs)
@@ -224,7 +225,7 @@ diffBoards (Board cs fd fc)
 		   		| cscontents == cscontents' = NullMove
 		   		| otherwise = Move (diffList cscontents cscontents') Cascades Cascades
 					where 
-						source = if S.size fc > S.size fc' then FreeCells else Cascades
+						source = if S.size fc == S.size fc' then Cascades else FreeCells
 						cscontents = concat cs
 						cscontents' = concat cs'
 						fdcontents = concat fd
@@ -235,7 +236,7 @@ diffBoards (Board cs fd fc)
 													   | otherwise = x1
 						diffList _ _ = error "No move."
 
-main :: IO ([Move], [Board])
+main :: IO (Solution, [Board])
 main = do
 	x <- makeGame
 	print x
