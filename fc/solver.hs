@@ -3,7 +3,6 @@ import Data.Maybe
 import System.Random
 import Control.Applicative ((<$>))
 import qualified Data.Set as S
-import Debug.Trace
 
 data Rank = Ace | Two | Three | Four | Five | Six | Seven | Eight |
 	Nine | Ten | Jack | Queen | King | SuperKing deriving (Show, Eq, Enum, Ord)
@@ -13,14 +12,15 @@ data Suit = Heart | Diamond | Club | Spade deriving (Show, Eq, Enum, Ord)
 data Card = Card { rank :: Rank, suit :: Suit } deriving (Show, Eq, Ord)
 
 type Stack = [Card]
+type CardSet = S.Set Card
 
 data Board = Board {
 		cascades :: [Stack],
 		foundations :: [Stack],
-		freecells :: Stack} deriving (Show)
+		freecells :: CardSet} deriving (Show)
 
 instance Eq Board where
-	Board cs fd fc == Board cs' fd' fc' = (fd == fd') && (S.fromList fc == S.fromList fc') && (S.fromList cs == S.fromList cs')
+	Board cs fd fc == Board cs' fd' fc' = (fd == fd') && (fc == fc') && (S.fromList cs == S.fromList cs')
 
 
 red :: Card -> Bool
@@ -58,11 +58,11 @@ pushFoundation (Board cs fd fc) (Card rk st) = Board cs fd' fc
 		num = fromJust $ elemIndex st [Heart .. Spade]
 
 pushFreeCell :: Board -> Card -> Board
-pushFreeCell (Board cs fd fc) cd = Board cs fd (cd : fc)
+pushFreeCell (Board cs fd fc) cd = Board cs fd $ S.insert cd fc
 
 popFreeCell :: Board -> Card -> Board
 popFreeCell (Board cs fd fc) card = Board cs fd fc'
-	where fc' = filter (/=card) fc
+	where fc' = S.delete card fc
 
 
 playableCascade :: Stack -> Card -> Bool
@@ -89,7 +89,7 @@ playableFoundation (Board _ xs _) (Card rk st) = playableFoundation' (xs !! num)
 		playableFoundation' _ = rk == Ace
 
 playableFreeCell :: Board -> Bool
-playableFreeCell (Board _ _ fc) = length fc < 4
+playableFreeCell (Board _ _ fc) = S.size fc < 4
 
 allCardPlays :: Board -> Card -> [Board]
 allCardPlays bd card = pf ++ stackplays ++ fcplays
@@ -108,8 +108,8 @@ allCardPlaysNoFC bd card = pf ++ stackplays
 availableCascadeCards :: Board -> [Card]
 availableCascadeCards (Board cs _ _) = map head $ filter (not . null) cs
 
-availableFreeCellCards :: Board -> [Card]
-availableFreeCellCards = freecells
+availableFreeCellCards :: Board -> Stack
+availableFreeCellCards = S.elems . freecells
 
 allPermissable :: Board -> [Board]
 allPermissable bd = filter (/= bd) $ concatMap (uncurry allCardPlays) (zip boards cards)
@@ -122,7 +122,7 @@ allPermissable bd = filter (/= bd) $ concatMap (uncurry allCardPlays) (zip board
 		boards = csboards ++ fcboards
 
 solvedBoard :: Board -> Bool
-solvedBoard (Board cs _ fc) = all null cs && null fc
+solvedBoard (Board cs _ fc) = all null cs && S.null fc
 
 solver :: Board -> ([Move], [Board])
 solver board = (zipWith diffBoards (init solutionBoards) (tail solutionBoards), solutionBoards)
@@ -139,10 +139,10 @@ loadFile :: FilePath -> IO Board
 loadFile x = loadBoardFromText <$> readFile x
 
 loadBoardFromText :: String -> Board
-loadBoardFromText rawtext = loadBoard (lines rawtext) (Board [] [[],[],[],[]] [])
+loadBoardFromText rawtext = loadBoard (lines rawtext) (Board [] [[],[],[],[]] S.empty)
 	where 
 		loadBoard (('C':' ':s):ss) bd = loadBoard ss (bd { cascades = map parser (words s) : cascades bd })
-		loadBoard (('F':'C':' ':s):ss) bd = loadBoard ss (bd { freecells = map parser (words s) })
+		loadBoard (('F':'C':' ':s):ss) bd = loadBoard ss (bd { freecells = S.fromList $ map parser (words s) })
 		loadBoard (('F':' ':s):ss) bd = loadBoard ss (bd { foundations = map parser (words s) : foundations bd })
 		loadBoard _ bd = bd
 
@@ -196,13 +196,20 @@ makeGame = do
 		(s6, l7) = splitAt 6 l6
 		s7 = l7
 		cs = [s0,s1,s2,s3,s4,s5,s6,s7]
-	return $ Board cs [[],[],[],[]] []
+	return $ Board cs [[],[],[],[]] S.empty
 
 
 -- | Below code is just used to print a series of moves from a series of board states.
 data Location = Cascades | Foundations | FreeCells deriving (Show, Eq)
 
 data Move = Move Card Location Location | NullMove deriving Eq
+
+data Solution = Solution [Move]
+
+instance Show Solution where
+	show (Solution (NullMove:xs)) = show (Solution xs)
+	show (Solution (x:xs)) = show x ++ show (Solution xs)
+	show _ = ""
 
 instance Show Move where
 	show (Move (Card rk st) l1 l2) = show rk ++ " " ++ show st ++ ": " ++ show l1 ++ " -> " ++ show l2 ++ "\n"
@@ -212,12 +219,12 @@ diffBoards :: Board -> Board -> Move
 diffBoards (Board cs fd fc) 
 		   (Board cs' fd' fc') 
 		   		| fdcontents /= fdcontents' = Move (head $ diff fdcontents' fdcontents) source Foundations
-		   		| length fc > length fc' = Move (head $ diff fc fc') FreeCells Cascades
-		   		| length fc < length fc' = Move (head $ diff fc' fc) Cascades FreeCells
+		   		| S.size fc > S.size fc' = Move (head $ S.elems $ fc S.\\ fc') FreeCells Cascades
+		   		| S.size fc < S.size fc' = Move (head $ S.elems $ fc' S.\\ fc) Cascades FreeCells
 		   		| cscontents == cscontents' = NullMove
 		   		| otherwise = Move (diffList cscontents cscontents') Cascades Cascades
 					where 
-						source = if length fc > length fc' then FreeCells else Cascades
+						source = if S.size fc > S.size fc' then FreeCells else Cascades
 						cscontents = concat cs
 						cscontents' = concat cs'
 						fdcontents = concat fd
