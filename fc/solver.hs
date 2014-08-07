@@ -1,9 +1,11 @@
 import Data.List
 import Data.Maybe
 import System.Random
+import Data.Tree
 import Control.Applicative ((<$>))
 import Data.Set (Set)
 import qualified Data.Set as S
+
 
 data Rank = Ace | Two | Three | Four | Five | Six | Seven | Eight |
 	Nine | Ten | Jack | Queen | King | SuperKing deriving (Show, Eq, Enum, Ord)
@@ -136,6 +138,22 @@ solver board = (Solution $ zipWith diffBoards (init solutionBoards) (tail soluti
 							    | otherwise = solver' bds gs
 		solver' _ _ = error "Game appears to have no solution."
 
+type FCTree = Tree [Board]
+
+buildTree :: Board -> FCTree
+buildTree bd = unfoldTree f [bd]
+	where 
+		f b = (b, moves)
+			where moves = case filter (not . (`elem` b)) $ allPermissable $ head b of
+				[] -> []
+				x -> map (:b) x
+
+treeSolver :: Board -> (Solution, [Board])
+treeSolver board = (Solution $ zipWith diffBoards (init solutionBoards) (tail solutionBoards), solutionBoards)
+	where
+		newTreeSolver = reverse . head . filter (solvedBoard . head) . flatten . buildTree
+		solutionBoards = newTreeSolver board
+
 loadFile :: FilePath -> IO Board
 loadFile x = loadBoardFromText <$> readFile x
 
@@ -173,7 +191,7 @@ suitParser x = error $ "Unrecognized suit: " ++ x
 deck :: Stack
 deck = do
 	x <- [Ace .. King]
-	y <- [Heart .. Spade]
+	y <- [Heart .. ]
 	return $ Card x y
 
 deckShuffle :: Eq a => [a] -> IO [a]
@@ -200,6 +218,9 @@ makeGame = do
 	return $ Board cs [[],[],[],[]] S.empty
 
 
+makeDumbGame :: Board
+makeDumbGame = Board [[Card Ace Heart], [Card Ace Diamond]] [[],[],[],[]] S.empty
+
 -- | Below code is just used to print a series of moves from a series of board states.
 data Location = Cascades | Foundations | FreeCells deriving (Show, Eq)
 
@@ -218,8 +239,8 @@ instance Show Move where
 
 diffBoards :: Board -> Board -> Move
 diffBoards (Board cs fd fc) 
-		   (Board cs' fd' fc') 
-		   		| fdcontents /= fdcontents' = Move (head $ diff fdcontents' fdcontents) source Foundations
+		   (Board cs' fd' fc')
+		   		| concat fd /= concat fd' = Move (head $ diff (concat fd') (concat fd)) source Foundations
 		   		| S.size fc > S.size fc' = Move (head $ S.elems $ fc S.\\ fc') FreeCells Cascades
 		   		| S.size fc < S.size fc' = Move (head $ S.elems $ fc' S.\\ fc) Cascades FreeCells
 		   		| cscontents == cscontents' = NullMove
@@ -228,8 +249,6 @@ diffBoards (Board cs fd fc)
 						source = if S.size fc == S.size fc' then Cascades else FreeCells
 						cscontents = concat cs
 						cscontents' = concat cs'
-						fdcontents = concat fd
-						fdcontents' = concat fd'
 						diff x y = filter (not . (`elem` y)) x
 						diffList (x1:x2:xs) (y1:y2:ys) | x1 == y1 = diffList (x2:xs) (y2:ys)
 													   | x1 == y2 = y1
@@ -240,6 +259,6 @@ main :: IO (Solution, [Board])
 main = do
 	x <- makeGame
 	print x
-	let (j, k) = solver x
+	let (j, k) = treeSolver x
 	print j
 	return (j,k)
