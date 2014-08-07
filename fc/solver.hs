@@ -94,18 +94,18 @@ playableFoundation (Board _ xs _) (Card rk st) = playableFoundation' (xs !! num)
 playableFreeCell :: Board -> Bool
 playableFreeCell (Board _ _ fc) = S.size fc < 4
 
-allCardPlays :: Board -> Card -> [Board]
-allCardPlays bd card = pf ++ stackplays ++ fcplays
+allCardPlays :: Board -> Card -> Location -> [(Board, Move)]
+allCardPlays bd card source = pf ++ stackplays ++ fcplays
 	where
-		pf = [pushFoundation bd card | playableFoundation bd card]
-		fcplays = [pushFreeCell bd card | playableFreeCell bd]
-		stackplays = map (pushCascade bd card) $ playableCascades bd card
+		pf = [(pushFoundation bd card, Move card source Foundations) | playableFoundation bd card]
+		fcplays = [(pushFreeCell bd card, Move card source FreeCells) | playableFreeCell bd]
+		stackplays = map ((\x->(x, Move card source Cascades)) . pushCascade bd card) $ playableCascades bd card
 
-allCardPlaysNoFC :: Board -> Card -> [Board]
-allCardPlaysNoFC bd card = pf ++ stackplays
+allCardPlaysNoFC :: Board -> Card -> Location -> [(Board, Move)]
+allCardPlaysNoFC bd card source = pf ++ stackplays
 	where
-		pf = [pushFoundation bd card | playableFoundation bd card]
-		stackplays = map (pushCascade bd card) $ playableCascades bd card
+		pf = [(pushFoundation bd card, Move card source Foundations) | playableFoundation bd card]
+		stackplays = map ((\x->(x,Move card source Cascades)) . pushCascade bd card) $ playableCascades bd card
 
 
 availableCascadeCards :: Board -> [Card]
@@ -114,8 +114,8 @@ availableCascadeCards (Board cs _ _) = map head $ filter (not . null) cs
 availableFreeCellCards :: Board -> Stack
 availableFreeCellCards = S.elems . freecells
 
-allPermissable :: Board -> [Board]
-allPermissable bd = filter (/= bd) $ concatMap (uncurry allCardPlays) (zip boards cards)
+allPermissable :: Board -> [(Board, Move)]
+allPermissable bd = concatMap (\(a,b,c)->allCardPlays a b c) (zip3 boards cards sources)
 	where
 		fccards = availableFreeCellCards bd
 		fcboards = map (popFreeCell bd) fccards
@@ -123,36 +123,23 @@ allPermissable bd = filter (/= bd) $ concatMap (uncurry allCardPlays) (zip board
 		csboards = map (popCascade bd) cscards
 		cards = cscards ++ fccards
 		boards = csboards ++ fcboards
+		sources = replicate (length cscards) Cascades ++ replicate (length fccards) FreeCells
 
 solvedBoard :: Board -> Bool
 solvedBoard (Board cs _ fc) = all null cs && S.null fc
 
-solver :: Board -> (Solution, [Board])
-solver board = (Solution $ zipWith diffBoards (init solutionBoards) (tail solutionBoards), solutionBoards)
-	where
-		solutionBoards = reverse $ solver' [board] [allPermissable board]
-		solver' bds ((guess:guesses):gs) | guess `elem` bds = solver' bds (guesses:gs)
-									     | solvedBoard guess = guess : bds
-							             | otherwise = solver' (guess:bds) (allPermissable guess:guesses:gs)
-		solver' (bd:bds) (_:gs) | solvedBoard bd = bd : bds
-							    | otherwise = solver' bds gs
-		solver' _ _ = error "Game appears to have no solution."
-
-type FCTree = Tree [Board]
+type FCTree = Tree [(Board, Move)]
 
 buildTree :: Board -> FCTree
-buildTree bd = unfoldTree f [bd]
+buildTree bd = unfoldTree f [(bd, NullMove)]
 	where 
 		f b = (b, moves)
-			where moves = case filter (not . (`elem` b)) $ allPermissable $ head b of
+			where moves = case filter (not . (`elem` map fst b) . fst) $ allPermissable $ fst $ head b of
 				[] -> []
 				x -> map (:b) x
 
-treeSolver :: Board -> (Solution, [Board])
-treeSolver board = (Solution $ zipWith diffBoards (init solutionBoards) (tail solutionBoards), solutionBoards)
-	where
-		newTreeSolver = reverse . head . filter (solvedBoard . head) . flatten . buildTree
-		solutionBoards = newTreeSolver board
+treeSolver :: Board -> Solution
+treeSolver = Solution . map snd . reverse . head . filter (solvedBoard . fst . head) . flatten . buildTree
 
 loadFile :: FilePath -> IO Board
 loadFile x = loadBoardFromText <$> readFile x
@@ -190,7 +177,7 @@ suitParser x = error $ "Unrecognized suit: " ++ x
 
 deck :: Stack
 deck = do
-	x <- [Ace .. King]
+	x <- [Ace .. Ten]
 	y <- [Heart .. ]
 	return $ Card x y
 
@@ -222,7 +209,7 @@ makeDumbGame :: Board
 makeDumbGame = Board [[Card Ace Heart], [Card Ace Diamond]] [[],[],[],[]] S.empty
 
 -- | Below code is just used to print a series of moves from a series of board states.
-data Location = Cascades | Foundations | FreeCells deriving (Show, Eq)
+data Location = Cascades Int | Foundations | FreeCells deriving (Show, Eq)
 
 data Move = Move Card Location Location | NullMove deriving Eq
 
@@ -255,10 +242,9 @@ diffBoards (Board cs fd fc)
 													   | otherwise = x1
 						diffList _ _ = error "No move."
 
-main :: IO (Solution, [Board])
+main :: IO ()
 main = do
 	x <- makeGame
 	print x
-	let (j, k) = treeSolver x
+	let j = treeSolver x
 	print j
-	return (j,k)
