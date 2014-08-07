@@ -8,7 +8,7 @@ import qualified Data.Set as S
 
 
 data Rank = Ace | Two | Three | Four | Five | Six | Seven | Eight |
-	Nine | Ten | Jack | Queen | King | SuperKing deriving (Show, Eq, Enum, Ord)
+	Nine | Ten | Jack | Queen | King  deriving (Show, Eq, Enum, Ord)
 
 data Suit = Heart | Diamond | Club | Spade deriving (Show, Eq, Enum, Ord)
 
@@ -20,7 +20,7 @@ type CardSet = Set Card
 data Board = Board {
 		cascades :: [Stack],
 		foundations :: [Stack],
-		freecells :: CardSet} deriving (Show)
+		freecells :: CardSet}
 
 instance Eq Board where
 	Board cs fd fc == Board cs' fd' fc' = (fd == fd') && (fc == fc') && (S.fromList cs == S.fromList cs')
@@ -69,7 +69,8 @@ popFreeCell (Board cs fd fc) card = Board cs fd fc'
 
 
 playableCascade :: Stack -> Card -> Bool
-playableCascade (cd:_) pc = (black pc ==  red cd) && (rank cd == succ (rank pc))
+playableCascade (_:_) (Card King _) = False
+playableCascade (cd:_) pc = (black pc == red cd) && (rank cd == succ (rank pc))
 playableCascade _ _ = False
 
 emptyCascade :: Stack -> Bool
@@ -94,19 +95,18 @@ playableFoundation (Board _ xs _) (Card rk st) = playableFoundation' (xs !! num)
 playableFreeCell :: Board -> Bool
 playableFreeCell (Board _ _ fc) = S.size fc < 4
 
-allCardPlays :: Board -> Card -> Location -> [(Board, Move)]
-allCardPlays bd card source = pf ++ stackplays ++ fcplays
+allCardPlays :: Board -> Card -> Location -> [GameState]
+allCardPlays bd card source = allCardPlaysNoFC bd card source ++ fcplays
 	where
-		pf = [(pushFoundation bd card, Move card source Foundations) | playableFoundation bd card]
-		fcplays = [(pushFreeCell bd card, Move card source FreeCells) | playableFreeCell bd]
-		stackplays = map ((\x->(x, Move card source Cascades)) . pushCascade bd card) $ playableCascades bd card
+		fcplays = [GameState (pushFreeCell bd card) (Move card source FreeCells) | playableFreeCell bd]
 
-allCardPlaysNoFC :: Board -> Card -> Location -> [(Board, Move)]
+allCardPlaysNoFC :: Board -> Card -> Location -> [GameState]
 allCardPlaysNoFC bd card source = pf ++ stackplays
 	where
-		pf = [(pushFoundation bd card, Move card source Foundations) | playableFoundation bd card]
-		stackplays = map ((\x->(x,Move card source Cascades)) . pushCascade bd card) $ playableCascades bd card
-
+		pf = [GameState (pushFoundation bd card) (Move card source Foundations) | playableFoundation bd card]
+		cascadeInts = playableCascades bd card
+		cascadeBoards = map (pushCascade bd card) cascadeInts
+		stackplays = map (\(x,y) -> GameState x $ Move card source (Cascades y)) $ zip cascadeBoards cascadeInts
 
 availableCascadeCards :: Board -> [Card]
 availableCascadeCards (Board cs _ _) = map head $ filter (not . null) cs
@@ -114,7 +114,7 @@ availableCascadeCards (Board cs _ _) = map head $ filter (not . null) cs
 availableFreeCellCards :: Board -> Stack
 availableFreeCellCards = S.elems . freecells
 
-allPermissable :: Board -> [(Board, Move)]
+allPermissable :: Board -> [GameState]
 allPermissable bd = concatMap (\(a,b,c)->allCardPlays a b c) (zip3 boards cards sources)
 	where
 		fccards = availableFreeCellCards bd
@@ -123,23 +123,36 @@ allPermissable bd = concatMap (\(a,b,c)->allCardPlays a b c) (zip3 boards cards 
 		csboards = map (popCascade bd) cscards
 		cards = cscards ++ fccards
 		boards = csboards ++ fcboards
-		sources = replicate (length cscards) Cascades ++ replicate (length fccards) FreeCells
+		sources = replicate (length cscards) CascadesSource ++ replicate (length fccards) FreeCells
 
 solvedBoard :: Board -> Bool
 solvedBoard (Board cs _ fc) = all null cs && S.null fc
 
-type FCTree = Tree [(Board, Move)]
+data GameState = GameState { gameBoard :: Board, sourceMove :: Move }
+
+type FCTree = Tree [GameState]
 
 buildTree :: Board -> FCTree
-buildTree bd = unfoldTree f [(bd, NullMove)]
+buildTree bd = unfoldTree f [GameState bd BeginGame]
 	where 
 		f b = (b, moves)
-			where moves = case filter (not . (`elem` map fst b) . fst) $ allPermissable $ fst $ head b of
+			where moves = case filter (not . (`elem` map gameBoard b) . gameBoard) $ allPermissable $ gameBoard $ head b of
 				[] -> []
 				x -> map (:b) x
 
-treeSolver :: Board -> Solution
-treeSolver = Solution . map snd . reverse . head . filter (solvedBoard . fst . head) . flatten . buildTree
+filterAndPrune :: [[GameState]] -> [[GameState]]
+filterAndPrune x = if solvedBoard $ gb $ head x then head x : filterAndPrune filteredTail else filterAndPrune filteredTail
+			where 
+				gb = gameBoard . head
+				filteredTail = filter (\y->(gb y/= gb (head x)) && (length y < 150)) $ tail x
+
+treeSolverDF :: Board -> Solution
+treeSolverDF = Solution . map sourceMove . reverse . head . filter (solvedBoard . gameBoard . head) . flatten . buildTree
+
+treeSolverBF :: Board -> Solution
+treeSolverBF = Solution . map sourceMove . reverse . head . filterAndPrune . concat . levels . buildTree
+		
+
 
 loadFile :: FilePath -> IO Board
 loadFile x = loadBoardFromText <$> readFile x
@@ -161,12 +174,43 @@ parser ('6' : ks) = Card Six $ suitParser ks
 parser ('7' : ks) = Card Seven $ suitParser ks
 parser ('8' : ks) = Card Eight $ suitParser ks
 parser ('9' : ks) = Card Nine $ suitParser ks
-parser ('1' : '0' : ks) = Card Ten $ suitParser ks
+parser ('T' : ks) = Card Ten $ suitParser ks
 parser ('J' : ks) = Card Jack $ suitParser ks
 parser ('Q' : ks) = Card Queen $ suitParser ks
 parser ('K' : ks) = Card King $ suitParser ks
 parser ('A' : ks) = Card Ace $ suitParser ks
 parser x = error $ "Bad parse string: " ++ x
+
+cardchar :: Rank -> Char
+cardchar Ace = 'A'
+cardchar King = 'K'
+cardchar Queen = 'Q'
+cardchar Jack = 'J'
+cardchar Ten = 'T'
+cardchar Nine = '9'
+cardchar Eight = '8'
+cardchar Seven = '7'
+cardchar Six = '6'
+cardchar Five = '5'
+cardchar Four = '4'
+cardchar Three = '3'
+cardchar Two = '2'
+
+suitchar :: Suit -> Char
+suitchar Heart = 'H'
+suitchar Club = 'C'
+suitchar Diamond = 'D'
+suitchar Spade = 'S'
+
+cardstring :: Card -> String
+cardstring (Card rk st) = [cardchar rk, suitchar st]
+
+instance Show Board where
+	show (Board cs fd fc) = csstring ++ "\n" ++ fdstring ++ "\n" ++ fcstring
+		where
+			csstring = intercalate "\n" $ map (\x -> "C " ++ unwords (map cardstring x)) cs
+			fdstring = intercalate "\n" $ map (\x -> "FD " ++ unwords (map cardstring x)) fd
+			fcstring = "FC " ++ unwords (map cardstring $ S.elems fc)
 
 suitParser :: String -> Suit
 suitParser "H" = Heart
@@ -177,7 +221,7 @@ suitParser x = error $ "Unrecognized suit: " ++ x
 
 deck :: Stack
 deck = do
-	x <- [Ace .. Ten]
+	x <- [Ace .. King]
 	y <- [Heart .. ]
 	return $ Card x y
 
@@ -205,46 +249,24 @@ makeGame = do
 	return $ Board cs [[],[],[],[]] S.empty
 
 
-makeDumbGame :: Board
-makeDumbGame = Board [[Card Ace Heart], [Card Ace Diamond]] [[],[],[],[]] S.empty
+data Location = Cascades Int | CascadesSource | Foundations | FreeCells deriving (Show, Eq)
 
--- | Below code is just used to print a series of moves from a series of board states.
-data Location = Cascades Int | Foundations | FreeCells deriving (Show, Eq)
-
-data Move = Move Card Location Location | NullMove deriving Eq
+data Move = Move Card Location Location | BeginGame deriving Eq
 
 data Solution = Solution [Move]
 
 instance Show Solution where
-	show (Solution (NullMove:xs)) = show (Solution xs)
+	show (Solution (BeginGame:xs)) = show (Solution xs)
 	show (Solution (x:xs)) = show x ++ show (Solution xs)
 	show _ = ""
 
 instance Show Move where
 	show (Move (Card rk st) l1 l2) = show rk ++ " " ++ show st ++ ": " ++ show l1 ++ " -> " ++ show l2 ++ "\n"
-	show NullMove = ""
-
-diffBoards :: Board -> Board -> Move
-diffBoards (Board cs fd fc) 
-		   (Board cs' fd' fc')
-		   		| concat fd /= concat fd' = Move (head $ diff (concat fd') (concat fd)) source Foundations
-		   		| S.size fc > S.size fc' = Move (head $ S.elems $ fc S.\\ fc') FreeCells Cascades
-		   		| S.size fc < S.size fc' = Move (head $ S.elems $ fc' S.\\ fc) Cascades FreeCells
-		   		| cscontents == cscontents' = NullMove
-		   		| otherwise = Move (diffList cscontents cscontents') Cascades Cascades
-					where 
-						source = if S.size fc == S.size fc' then Cascades else FreeCells
-						cscontents = concat cs
-						cscontents' = concat cs'
-						diff x y = filter (not . (`elem` y)) x
-						diffList (x1:x2:xs) (y1:y2:ys) | x1 == y1 = diffList (x2:xs) (y2:ys)
-													   | x1 == y2 = y1
-													   | otherwise = x1
-						diffList _ _ = error "No move."
+	show BeginGame = ""
 
 main :: IO ()
 main = do
 	x <- makeGame
 	print x
-	let j = treeSolver x
+	let j = treeSolverDF x
 	print j
