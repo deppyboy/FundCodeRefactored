@@ -5,7 +5,14 @@ import Data.Tree
 import Control.Applicative ((<$>))
 import Data.Set (Set)
 import qualified Data.Set as S
+import Data.Vector (Vector)
+import qualified Data.Vector as V
 
+(<:>) :: a -> Vector a -> Vector a
+a <:> b = V.cons a b
+
+vectorToSet :: (Ord a) => Vector a -> Set a
+vectorToSet = S.fromList . V.toList
 
 data Rank = Ace | Two | Three | Four | Five | Six | Seven | Eight |
 	Nine | Ten | Jack | Queen | King  deriving (Show, Eq, Enum, Ord)
@@ -14,17 +21,16 @@ data Suit = Heart | Diamond | Club | Spade deriving (Show, Eq, Enum, Ord)
 
 data Card = Card { rank :: Rank, suit :: Suit } deriving (Show, Eq, Ord)
 
-type Stack = [Card]
+type Stack = Vector Card
 type CardSet = Set Card
 
 data Board = Board {
-		cascades :: [Stack],
-		foundations :: [Stack],
+		cascades :: Vector Stack,
+		foundations :: Vector Stack,
 		freecells :: CardSet}
 
 instance Eq Board where
-	Board cs fd fc == Board cs' fd' fc' = (fd == fd') && (fc == fc') && (S.fromList cs == S.fromList cs')
-
+	Board cs fd fc == Board cs' fd' fc' = (fd == fd') && (fc == fc') && (vectorToSet cs == vectorToSet cs')
 
 red :: Card -> Bool
 red (Card _ Heart) = True
@@ -34,30 +40,29 @@ red (Card _ _) = False
 black :: Card -> Bool
 black = not . red
 
-applyAt :: [a] -> Int -> (a->a) -> [a]
+applyAt :: Vector a -> Int -> (a->a) -> Vector a
 applyAt list num f = applyAt' list 0
 	where
-		applyAt' (x:xs) counter | counter == num = f x : xs
-								| otherwise = x : applyAt' xs (counter+1)
-		applyAt' _ _ = []
+		applyAt' v counter | V.null v = V.empty
+						   | counter == num = V.cons (f $ V.head v) $ V.tail v
+						   | otherwise = V.cons (V.head v) $ applyAt' (V.tail v) $ counter+1
 
 pushCascade :: Board -> Card -> Int -> Board
 pushCascade (Board cs fd fc) cd num = Board cs' fd fc
-	where cs' = applyAt cs num (\x->cd : x)
+	where cs' = applyAt cs num (V.cons cd)
 
 popCascade :: Board -> Card -> Board
 popCascade (Board cs fd fc) cd = Board cs' fd fc
 	where
 		cs' = stackf cs
-		stackf (x:xs) | null x = x : stackf xs
-					  | head x == cd = tail x : xs
-					  | otherwise = x : stackf xs
-		stackf _ = []
+		stackf x | V.null $ V.head x = V.head x <:> stackf (V.tail x)
+				 | V.head (V.head x) == cd = V.tail (V.head x) <:> V.tail x
+				 | otherwise = V.cons (V.head x) $ stackf $ V.tail x
 
 pushFoundation :: Board -> Card -> Board
 pushFoundation (Board cs fd fc) (Card rk st) = Board cs fd' fc
 	where 
-		fd' = applyAt fd num (\x -> Card rk st : x)
+		fd' = applyAt fd num (\x -> Card rk st <:> x)
 		num = fromJust $ elemIndex st [Heart .. Spade]
 
 pushFreeCell :: Board -> Card -> Board
@@ -69,100 +74,101 @@ popFreeCell (Board cs fd fc) card = Board cs fd fc'
 
 
 playableCascade :: Stack -> Card -> Bool
-playableCascade (_:_) (Card King _) = False
-playableCascade (cd:_) pc = (black pc == red cd) && (rank cd == succ (rank pc))
-playableCascade _ _ = False
+playableCascade stack cd@(Card rk _) | V.null stack = True
+								     | rk == King = False
+								     | otherwise = (black cd == red (V.head stack)) && 
+								     		(rank (V.head stack) == succ (rank cd))
 
 emptyCascade :: Stack -> Bool
-emptyCascade (_:_) = False
-emptyCascade _ = True
+emptyCascade x | V.null x = True
+			   | otherwise = False
 
-safeHead :: [a] -> [a]
-safeHead (x:_) = [x]
-safeHead [] = []
+safeHead :: Vector a -> Vector a
+safeHead x | V.null x = V.empty
+		   | otherwise = V.singleton $ V.head x
 
-playableCascades :: Board -> Card -> [Int]
-playableCascades (Board stacks _ _) cd = findIndices (`playableCascade` cd) stacks ++ 
-										 safeHead (findIndices emptyCascade stacks)
+playableCascades :: Board -> Card -> Vector Int
+playableCascades (Board stacks _ _) cd = V.findIndices (`playableCascade` cd) stacks V.++ 
+										 safeHead (V.findIndices emptyCascade stacks)
 
 playableFoundation :: Board -> Card -> Bool
-playableFoundation (Board _ xs _) (Card rk st) = playableFoundation' (xs !! num)
+playableFoundation (Board _ xs _) (Card rk st) = playableFoundation' (xs V.! num)
 	where 
 		num = fromJust $ elemIndex st [Heart .. Spade]
-		playableFoundation' (x:_) = succ (rank x) == rk
-		playableFoundation' _ = rk == Ace
+		playableFoundation' x | V.null x = rk == Ace
+							  | otherwise = succ (rank $ V.head x) == rk
 
 playableFreeCell :: Board -> Bool
 playableFreeCell (Board _ _ fc) = S.size fc < 4
 
-allCardPlays :: Board -> Card -> Location -> [GameState]
-allCardPlays bd card source = allCardPlaysNoFC bd card source ++ fcplays
+allCardPlays :: Board -> Card -> Location -> Vector GameState
+allCardPlays bd card source = allCardPlaysNoFC bd card source V.++ fcplays
 	where
-		fcplays = [GameState (pushFreeCell bd card) (Move card source FreeCells) | playableFreeCell bd]
+		fcplays = V.fromList [GameState (pushFreeCell bd card) (Move card source FreeCells) | playableFreeCell bd]
 
-allCardPlaysNoFC :: Board -> Card -> Location -> [GameState]
-allCardPlaysNoFC bd card source = pf ++ stackplays
+allCardPlaysNoFC :: Board -> Card -> Location -> Vector GameState
+allCardPlaysNoFC bd card source = pf V.++ stackplays
 	where
-		pf = [GameState (pushFoundation bd card) (Move card source Foundations) | playableFoundation bd card]
+		pf = V.fromList [GameState (pushFoundation bd card) (Move card source Foundations) | playableFoundation bd card]
 		cascadeInts = playableCascades bd card
-		cascadeBoards = map (pushCascade bd card) cascadeInts
-		stackplays = map (\(x,y) -> GameState x $ Move card source (Cascades y)) $ zip cascadeBoards cascadeInts
+		cascadeBoards = V.map (pushCascade bd card) cascadeInts
+		stackplays = V.map (\(x,y) -> GameState x $ Move card source (Cascades y)) $ V.zip cascadeBoards cascadeInts
 
-availableCascadeCards :: Board -> [Card]
-availableCascadeCards (Board cs _ _) = map head $ filter (not . null) cs
+availableCascadeCards :: Board -> Vector Card
+availableCascadeCards (Board cs _ _) = V.map V.head $ V.filter (not . V.null) cs
 
 availableFreeCellCards :: Board -> Stack
-availableFreeCellCards = S.elems . freecells
+availableFreeCellCards = V.fromList . S.elems . freecells
 
-allPermissable :: Board -> [GameState]
-allPermissable bd = concatMap (\(a,b,c)->allCardPlays a b c) (zip3 boards cards sources)
+allPermissable :: Board -> Vector GameState
+allPermissable bd = V.concatMap (\(a,b,c)->allCardPlays a b c) (V.zip3 boards cards sources)
 	where
 		fccards = availableFreeCellCards bd
-		fcboards = map (popFreeCell bd) fccards
+		fcboards = V.map (popFreeCell bd) fccards
 		cscards = availableCascadeCards bd
-		csboards = map (popCascade bd) cscards
-		cards = cscards ++ fccards
-		boards = csboards ++ fcboards
-		sources = replicate (length cscards) CascadesSource ++ replicate (length fccards) FreeCells
+		csboards = V.map (popCascade bd) cscards
+		cards = cscards V.++ fccards
+		boards = csboards V.++ fcboards
+		sources = V.replicate (V.length cscards) CascadesSource V.++ V.replicate (V.length fccards) FreeCells
 
 solvedBoard :: Board -> Bool
-solvedBoard (Board cs _ fc) = all null cs && S.null fc
+solvedBoard (Board cs _ fc) = V.all V.null cs && S.null fc
 
 data GameState = GameState { gameBoard :: Board, sourceMove :: Move }
 
-type FCTree = Tree [GameState]
+type FCTree = Tree (Vector GameState)
 
 buildTree :: Board -> FCTree
-buildTree bd = unfoldTree f [GameState bd BeginGame]
+buildTree bd = unfoldTree f $ V.singleton $ GameState bd BeginGame
 	where 
 		f b = (b, moves)
-			where moves = case filter (not . (`elem` map gameBoard b) . gameBoard) $ allPermissable $ gameBoard $ head b of
-				[] -> []
-				x -> map (:b) x
+			where moves = V.toList $ if V.null val then V.empty else V.map (`V.cons` b) val
+				where val = V.filter (not . (`V.elem` V.map gameBoard b) . gameBoard) $ allPermissable $ gameBoard $ V.head b
 
-filterAndPrune :: [[GameState]] -> [[GameState]]
+filterAndPrune :: [Vector GameState] -> [Vector GameState]
 filterAndPrune x = if solvedBoard $ gb $ head x then head x : filterAndPrune filteredTail else filterAndPrune filteredTail
 			where 
-				gb = gameBoard . head
-				filteredTail = filter (\y->(gb y/= gb (head x)) && (length y < 150)) $ tail x
+				gb = gameBoard . V.head
+				filteredTail = filter (\y->(gb y/= gb (head x)) && (V.length y < 150)) $ tail x
 
 treeSolverDF :: Board -> Solution
-treeSolverDF = Solution . map sourceMove . reverse . head . filter (solvedBoard . gameBoard . head) . flatten . buildTree
+treeSolverDF = Solution . V.toList . V.map sourceMove . V.reverse . head . filter (solvedBoard . gameBoard . V.head) . flatten . buildTree
 
 treeSolverBF :: Board -> Solution
-treeSolverBF = Solution . map sourceMove . reverse . head . filterAndPrune . concat . levels . buildTree
+treeSolverBF = Solution . V.toList . V.map sourceMove . V.reverse . head . filterAndPrune . concat . levels . buildTree
 		
 
 
 loadFile :: FilePath -> IO Board
 loadFile x = loadBoardFromText <$> readFile x
 
+--the foundations are implemented wrong, natch.
 loadBoardFromText :: String -> Board
-loadBoardFromText rawtext = loadBoard (lines rawtext) (Board [] [[],[],[],[]] S.empty)
+loadBoardFromText rawtext = loadBoard (lines rawtext) (Board V.empty (V.fromList [V.empty, V.empty, V.empty, V.empty]) S.empty)
 	where 
-		loadBoard (('C':' ':s):ss) bd = loadBoard ss (bd { cascades = map parser (words s) : cascades bd })
+		loadBoard (('C':' ':s):ss) bd = loadBoard ss (bd { cascades = V.fromList (map parser (words s)) <:> cascades bd })
 		loadBoard (('F':'C':' ':s):ss) bd = loadBoard ss (bd { freecells = S.fromList $ map parser (words s) })
-		loadBoard (('F':' ':s):ss) bd = loadBoard ss (bd { foundations = map parser (words s) : foundations bd })
+		loadBoard (('F':' ':s):ss) bd = loadBoard ss (bd { foundations = V.fromList (map parser (words s)) <:> foundations bd })
 		loadBoard _ bd = bd
 
 parser :: String -> Card
@@ -208,9 +214,10 @@ cardstring (Card rk st) = [cardchar rk, suitchar st]
 instance Show Board where
 	show (Board cs fd fc) = csstring ++ "\n" ++ fdstring ++ "\n" ++ fcstring
 		where
-			csstring = intercalate "\n" $ map (\x -> "C " ++ unwords (map cardstring x)) cs
-			fdstring = intercalate "\n" $ map (\x -> "FD " ++ unwords (map cardstring x)) fd
+			csstring = intercalate "\n" $ map (\x -> "C " ++ unwords (map cardstring x)) cs'
+			fdstring = intercalate "\n" $ map (\x -> "FD " ++ unwords (map cardstring x)) fd'
 			fcstring = "FC " ++ unwords (map cardstring $ S.elems fc)
+			(cs', fd') = (V.toList (V.map V.toList cs), V.toList (V.map V.toList fd))
 
 suitParser :: String -> Suit
 suitParser "H" = Heart
@@ -219,7 +226,7 @@ suitParser "D" = Diamond
 suitParser "S" = Spade
 suitParser x = error $ "Unrecognized suit: " ++ x
 
-deck :: Stack
+deck :: [Card]
 deck = do
 	x <- [Ace .. King]
 	y <- [Heart .. ]
@@ -245,9 +252,8 @@ makeGame = do
 		(s5, l6) = splitAt 6 l5
 		(s6, l7) = splitAt 6 l6
 		s7 = l7
-		cs = [s0,s1,s2,s3,s4,s5,s6,s7]
-	return $ Board cs [[],[],[],[]] S.empty
-
+		cs = V.fromList $ map V.fromList [s0,s1,s2,s3,s4,s5,s6,s7]
+	return $ Board cs (V.fromList [V.empty, V.empty, V.empty, V.empty]) S.empty
 
 data Location = Cascades Int | CascadesSource | Foundations | FreeCells deriving (Show, Eq)
 
@@ -269,4 +275,5 @@ main = do
 	x <- makeGame
 	print x
 	let j = treeSolverDF x
+	writeFile "out.txt" (show x ++ show j)
 	print j
