@@ -5,6 +5,7 @@ import Data.Tree
 import Control.Applicative ((<$>))
 import Data.Set (Set)
 import qualified Data.Set as S
+import Control.Monad.State.Lazy
 
 data Rank = Ace | Two | Three | Four | Five | Six | Seven | Eight |
 	Nine | Ten | Jack | Queen | King  deriving (Show, Eq, Enum, Ord)
@@ -19,7 +20,7 @@ type CardSet = Set Card
 data Board = Board {
 		cascades :: [Stack],
 		foundations :: [Stack],
-		freecells :: CardSet}
+		freecells :: CardSet} deriving Ord
 
 instance Eq Board where
 	Board cs fd fc == Board cs' fd' fc' = (fd == fd') && (fc == fc') && (S.fromList cs == S.fromList cs')
@@ -113,8 +114,30 @@ availableCascadeCards (Board cs _ _) = map head $ filter (not . null) cs
 availableFreeCellCards :: Board -> Stack
 availableFreeCellCards = S.elems . freecells
 
+data Color = Red | Black deriving (Eq, Show, Enum)
+
+color :: Card -> Color
+color cd = if red cd then Red else Black
+
+highestForceable :: [[Card]] -> Color -> Rank
+highestForceable [[],[],_,_] Black = Two
+highestForceable [_,_,[],[]] Red = Two
+highestForceable [he,di,cl,sp] col | null stack1 = rank $ head stack2
+								   | null stack2 = rank $ head stack1
+								   | otherwise = lesser
+	where 
+		(stack1,stack2) = if col == Black then (he, di) else (cl, sp)
+		lesser = safesucc $ rank $ head $ if rank (head stack1) > rank (head stack2) then stack2 else stack1
+		safesucc King = King
+		safesucc x = succ x
+highestForceable _ _ = Two
+
+forcedMove :: GameState -> Bool
+forcedMove (GameState (Board _ fd _) (Move cd _ Foundations)) = rank cd <= highestForceable fd (color cd)
+forcedMove _ = False
+
 allPermissable :: Board -> [GameState]
-allPermissable bd = concatMap (\(a,b,c)->allCardPlays a b c) (zip3 boards cards sources)
+allPermissable bd = if any forcedMove moves then [head (filter forcedMove moves)] else moves
 	where
 		fccards = availableFreeCellCards bd
 		fcboards = map (popFreeCell bd) fccards
@@ -122,12 +145,13 @@ allPermissable bd = concatMap (\(a,b,c)->allCardPlays a b c) (zip3 boards cards 
 		csboards = map (popCascade bd) cscards
 		cards = fccards ++ cscards
 		boards = fcboards ++ csboards
-		sources = replicate (length fccards) FreeCells ++ replicate (length cscards) CascadesSource 
+		sources = replicate (length fccards) FreeCells ++ replicate (length cscards) CascadesSource
+		moves = concatMap (\(a,b,c)->allCardPlays a b c) (zip3 boards cards sources)
 
 solvedBoard :: Board -> Bool
 solvedBoard (Board cs _ fc) = all null cs && S.null fc
 
-data GameState = GameState { gameBoard :: Board, sourceMove :: Move }
+data GameState = GameState { gameBoard :: Board, sourceMove :: Move } deriving (Show, Eq)
 
 type FCTree = Tree [GameState]
 
@@ -137,7 +161,6 @@ buildTree bd = unfoldTree f [GameState bd BeginGame]
 		f b = (b, moves)
 			where moves = if null val then [] else map (:b) val
 				where val = filter (not . (`elem` map gameBoard b) . gameBoard) $ allPermissable $ gameBoard $ head b
-
 
 filterAndPrune :: [[GameState]] -> [[GameState]]
 filterAndPrune x = if solvedBoard $ gb $ head x then head x : filterAndPrune filteredTail else filterAndPrune filteredTail
@@ -152,6 +175,24 @@ treeSolverDF = Solution . map sourceMove . reverse . head . filter (solvedBoard 
 treeSolverBF :: Board -> Solution
 treeSolverBF = Solution . map sourceMove . reverse . head . filterAndPrune . concat . levels . buildTree
 		
+treeSolverPruned :: Board -> Solution
+treeSolverPruned bd = Solution $ 
+					map sourceMove $
+					reverse $
+					fromJust $
+					head $
+					filter (/=Nothing) $
+					evalState (check $ buildTree bd) S.empty
+
+check :: FCTree -> State (Set Board) [Maybe [GameState]]
+check (Node s forests) = do
+	bdset <- get
+	let bd = gameBoard $ head s
+	if solvedBoard bd then return [Just s] else
+		if S.member bd bdset then return [Nothing] else do
+			modify (S.insert bd) 
+			result <- mapM check forests
+			return $ concat result
 
 
 loadFile :: FilePath -> IO Board
@@ -222,7 +263,7 @@ suitParser x = error $ "Unrecognized suit: " ++ x
 
 deck :: [Card]
 deck = do
-	x <- [Ace .. King]
+	x <- [Ace .. ]
 	y <- [Heart .. ]
 	return $ Card x y
 
@@ -268,6 +309,6 @@ main :: IO ()
 main = do
 	x <- makeGame
 	print x
-	let j = treeSolverDF x
+	let j = treeSolverPruned x
 	writeFile "out.txt" (show x ++ show j)
 	print j
